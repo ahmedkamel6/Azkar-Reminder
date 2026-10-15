@@ -148,7 +148,7 @@ struct AppSettings {
     // Internal
     bool          firstLaunch       = true;
     bool          paused            = false;
-    int           pauseUntilUnix    = 0;      // 0 = not paused
+    int64_t       pauseUntilUnix    = 0;      // 0 = not paused
     long long     lastUpdateCheck   = 0;      // Unix timestamp
 
     // Update checker — persisted so we can show the prompt after restart
@@ -166,18 +166,18 @@ public:
 
     // Persist immediately
     bool Save();
-
-    // Accessors (Legacy - not thread safe against concurrent UI updates)
-    AppSettings&       Get() { return m_settings; }
-    const AppSettings& Get() const { return m_settings; }
+    bool BackupInvalidFile();
 
     // Thread-safe settings access
     AppSettings GetCopy() const;
     void Update(const AppSettings& newSettings);
+    void UpdatePreferences(const AppSettings& newSettings);
+    void Modify(const std::function<void(AppSettings&)>& change);
+    static void Validate(AppSettings& settings);
 
     // Change notification
     using ChangeCallback = std::function<void()>;
-    void OnChanged(ChangeCallback cb) { m_changeCallbacks.push_back(cb); }
+    void OnChanged(ChangeCallback cb) { std::lock_guard<std::mutex> lock(m_mutex); m_changeCallbacks.push_back(std::move(cb)); }
     void NotifyChanged();
 
     Settings(const Settings&) = delete;

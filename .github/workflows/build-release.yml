@@ -1,426 +1,180 @@
 name: Build and Multi-Platform Release
 
 on:
+  pull_request:
   push:
-    branches:
-      - main
-    tags:
-      - 'v*'
+    branches: [main]
+    tags: ['v*']
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
-  # ─────────────────────────────────────────────────────────────────────────────
-  # 1. WINDOWS BUILD
-  # ─────────────────────────────────────────────────────────────────────────────
   build-windows:
-    name: Windows (x64)
+    name: Windows x64
     runs-on: windows-latest
-
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+      - name: Configure and build native Windows app
+        run: |
+          cmake -S . -B build -DBUILD_QT_APP=OFF -DBUILD_TESTING=ON
+          cmake --build build --config Release --parallel
+      - name: Run tests
+        run: ctest --test-dir build -C Release --output-on-failure
+      - name: Verify binary and audio
+        run: |
+          if (!(Test-Path "build/bin/Release/AzkarReminder.exe")) { throw "Executable not found" }
+          if (!(Test-Path "build/bin/Release/audio/diode_matrix.mp3")) { throw "Audio asset not found" }
+      - name: Build installer
+        run: |
+          choco install innosetup -y --no-progress
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer/AzkarReminder.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build MSIX with the registered Store identity
+        run: ./installer/msix/build_msix.ps1
+      - name: Test native executable and Windows packages
+        timeout-minutes: 5
+        run: |
+          ./scripts/smoke_windows.ps1 -Executable build/bin/Release/AzkarReminder.exe
+          ./scripts/smoke_windows_packages.ps1 -SetupPath release/AzkarReminder-Windows-Setup.exe -PackagePath release/AzkarReminder-1.2.5.msix -ReferenceExecutable build/bin/Release/AzkarReminder.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AzkarReminder-Windows-Packages
+          path: |
+            release/*.exe
+            release/*.msix*
+          if-no-files-found: error
 
-    - name: Configure CMake
-      run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+  check-windows-qt:
+    name: Windows optional Qt frontend
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install official Qt SDK
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.3'
+          arch: win64_msvc2022_64
+          cache: true
+      - name: Build both Windows frontends and run tests
+        run: |
+          cmake -S . -B build-qt -DBUILD_QT_APP=ON -DBUILD_TESTING=ON
+          cmake --build build-qt --config Release --parallel
+          ctest --test-dir build-qt -C Release --output-on-failure
 
-    - name: Build Core Tests & Windows App
-      run: cmake --build build --config Release
-
-    - name: Run Core Unit Tests
-      run: .\build\Release\azkar_core_tests.exe
-
-    - name: Verify Windows Binaries
-      run: |
-        if (!(Test-Path "build\bin\Release\AzkarReminder.exe")) { throw "Executable not found" }
-        if (!(Test-Path "build\bin\Release\audio\diode_matrix.mp3")) { throw "Audio asset not found" }
-
-    - name: Install Inno Setup
-      run: choco install innosetup -y --no-progress
-
-    - name: Compile Inno Setup Installer
-      run: |
-        & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer\AzkarReminder.iss
-
-    - name: Build Microsoft Store MSIX Package
-      run: |
-        powershell -ExecutionPolicy Bypass -File installer/msix/build_msix.ps1
-
-    - name: Upload Windows Packages
-      uses: actions/upload-artifact@v4
-      with:
-        name: AzkarReminder-Windows-Packages
-        path: |
-          release/*.exe
-          release/*.msix
-          release/*.cer
-
-  # ─────────────────────────────────────────────────────────────────────────────
-  # 2. LINUX BUILD (Qt 6 + AppImage with complete bundled Qt libraries)
-  # ─────────────────────────────────────────────────────────────────────────────
   build-linux:
-    name: Linux (x86_64 AppImage)
+    name: Linux x86_64 AppImage
     runs-on: ubuntu-22.04
-
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build qt6-base-dev qt6-base-dev-tools qt6-wayland \
+            libxcb1-dev libgl1-mesa-dev libasound2-dev libpulse-dev file curl patchelf dbus-x11 xvfb
+      - name: Configure and build
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_QT_APP=ON -DBUILD_TESTING=ON
+          cmake --build build --parallel 4
+      - name: Run core, audio, UI and executable tests
+        timeout-minutes: 5
+        run: |
+          dbus-run-session -- ctest --test-dir build --output-on-failure
+          dbus-run-session -- bash scripts/smoke_linux.sh build/azkar_reminder
+          dbus-run-session -- xvfb-run -a env QT_QPA_PLATFORM=xcb bash scripts/smoke_linux.sh build/azkar_reminder
+          xvfb-run -a env AZKAR_TEST_X11=1 ctest --test-dir build -R X11FullScreen --output-on-failure
+      - name: Verify core-only configuration
+        run: |
+          cmake -S . -B build-core -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_QT_APP=OFF
+          cmake --build build-core --parallel 4
+          ctest --test-dir build-core --output-on-failure
+      - name: Package Qt libraries and plugins
+        run: bash scripts/package_linux.sh build release
+      - name: Test AppImage in a container without Qt
+        run: |
+          docker run --rm -v "$PWD:/source:ro" ubuntu:22.04 bash -c '
+            apt-get update && apt-get install -y --no-install-recommends libgl1 libegl1 libopengl0 libfontconfig1 libxkbcommon0 libdbus-1-3 &&
+            cp /source/release/*.AppImage* /tmp/ && cd /tmp && sha256sum --check *.sha256 &&
+            chmod +x *.AppImage && bash /source/scripts/smoke_linux.sh /tmp/AzkarReminder-Linux-x86_64.AppImage --appimage-extract-and-run'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AzkarReminder-Linux-AppImage
+          path: release/*.AppImage*
+          if-no-files-found: error
 
-    - name: Install Dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y \
-          cmake \
-          ninja-build \
-          qt6-base-dev \
-          qt6-base-dev-tools \
-          qt6-qpa-plugins \
-          qt6-wayland \
-          libgl1-mesa-dev \
-          libasound2-dev \
-          libpulse-dev \
-          libx11-dev \
-          libxcb-cursor0 \
-          libxcb-icccm4 \
-          libxcb-image0 \
-          libxcb-keysyms1 \
-          libxcb-randr0 \
-          libxcb-render-util0 \
-          libxcb-shape0 \
-          libxcb-sync1 \
-          libxcb-xfixes0 \
-          libxcb-xinerama0 \
-          libxcb-xkb1 \
-          libxkbcommon0 \
-          libxkbcommon-x11-0 \
-          libicu70 \
-          file \
-          patchelf
-
-    - name: Configure CMake
-      run: |
-        cmake -S . -B build -G Ninja \
-          -DCMAKE_BUILD_TYPE=Release \
-          -DBUILD_QT_APP=ON
-
-    - name: Build
-      run: cmake --build build --config Release
-
-    - name: Run Core Unit Tests
-      run: ./build/azkar_core_tests
-
-    - name: Package AppImage with bundled Qt
-      run: |
-        # ── 1. Prepare AppDir structure ───────────────────────────────────────
-        mkdir -p AppDir/usr/bin
-        mkdir -p AppDir/usr/lib
-        mkdir -p AppDir/usr/plugins/platforms
-        mkdir -p AppDir/usr/plugins/imageformats
-        mkdir -p AppDir/usr/plugins/platforminputcontexts
-        mkdir -p AppDir/usr/share/applications
-        mkdir -p AppDir/usr/share/icons/hicolor/256x256/apps
-        mkdir -p AppDir/usr/share/azkar-reminder/audio
-        mkdir -p AppDir/usr/share/azkar-reminder/fonts
-
-        cp build/azkar_reminder AppDir/usr/bin/
-
-        [ -f assets/content.md ]              && cp assets/content.md              AppDir/usr/share/azkar-reminder/
-        [ -f assets/audio/diode_matrix.mp3 ]  && cp assets/audio/diode_matrix.mp3  AppDir/usr/share/azkar-reminder/audio/
-        [ -f assets/fonts/Cairo-Regular.ttf ] && cp assets/fonts/Cairo-Regular.ttf AppDir/usr/share/azkar-reminder/fonts/
-
-        if [ -f assets/images/logo.png ]; then
-          cp assets/images/logo.png AppDir/azkar-reminder.png
-          cp assets/images/logo.png AppDir/.DirIcon
-          cp assets/images/logo.png AppDir/usr/share/icons/hicolor/256x256/apps/azkar-reminder.png
-        fi
-
-        # ── 2. Desktop entry ──────────────────────────────────────────────────
-        printf '[Desktop Entry]\nType=Application\nName=Azkar Reminder\nExec=azkar_reminder\nIcon=azkar-reminder\nCategories=Utility;Clock;Qt;\nTerminal=false\n' > AppDir/usr/share/applications/azkar-reminder.desktop
-        cp AppDir/usr/share/applications/azkar-reminder.desktop AppDir/azkar-reminder.desktop
-
-        # ── 3. Copy Qt6 shared libraries and all core dependencies ────────────
-        QT_LIB_DIR="/usr/lib/x86_64-linux-gnu"
-        echo "Copying Qt6 core libraries from $QT_LIB_DIR..."
-        for lib in libQt6Core libQt6Gui libQt6Widgets libQt6DBus libQt6XcbQpa libQt6Network libQt6OpenGL libQt6WaylandClient; do
-          find "$QT_LIB_DIR" -maxdepth 1 -name "${lib}.so*" -exec cp -Pv {} AppDir/usr/lib/ \; 2>/dev/null || true
-        done
-
-        echo "Copying ICU and supporting libraries..."
-        for lib in libicuuc libicui18n libicudata libxkbcommon libxkbcommon-x11 libxcb-cursor libxcb-icccm libxcb-image libxcb-keysyms libxcb-randr libxcb-render-util libxcb-shape libxcb-sync libxcb-xfixes libxcb-xinerama libxcb-xkb; do
-          find "$QT_LIB_DIR" -maxdepth 1 -name "${lib}.so*" -exec cp -Pv {} AppDir/usr/lib/ \; 2>/dev/null || true
-        done
-
-        echo "Copying Qt plugins..."
-        QT_PLUGINS_DIR="/usr/lib/x86_64-linux-gnu/qt6/plugins"
-        cp -rv "$QT_PLUGINS_DIR/platforms"/*.so AppDir/usr/plugins/platforms/ 2>/dev/null || true
-        cp -rv "$QT_PLUGINS_DIR/imageformats"/*.so AppDir/usr/plugins/imageformats/ 2>/dev/null || true
-        cp -rv "$QT_PLUGINS_DIR/platforminputcontexts"/*.so AppDir/usr/plugins/platforminputcontexts/ 2>/dev/null || true
-        if [ -d "$QT_PLUGINS_DIR/xcbglintegrations" ]; then
-          mkdir -p AppDir/usr/plugins/xcbglintegrations
-          cp -rv "$QT_PLUGINS_DIR/xcbglintegrations"/*.so AppDir/usr/plugins/xcbglintegrations/ 2>/dev/null || true
-        fi
-
-        # Verify libqxcb.so exists (critical for X11 Linux!)
-        if [ ! -f "AppDir/usr/plugins/platforms/libqxcb.so" ]; then
-          echo "ERROR: libqxcb.so not found in AppDir/usr/plugins/platforms!"
-          find /usr/lib -name "libqxcb.so" 2>/dev/null
-          exit 1
-        fi
-        echo "libqxcb.so verified successfully!"
-
-        # ── 4. Create qt.conf ─────────────────────────────────────────────────
-        printf '[Paths]\nPrefix = ..\nPlugins = plugins\nLibraries = lib\n' > AppDir/usr/bin/qt.conf
-
-        # ── 5. AppRun launcher ────────────────────────────────────────────────
-        printf '#!/bin/sh\nHERE="$(dirname "$(readlink -f "${0}")")"\nexport LD_LIBRARY_PATH="${HERE}/usr/lib:${LD_LIBRARY_PATH}"\nexport QT_PLUGIN_PATH="${HERE}/usr/plugins"\nexport QT_QPA_PLATFORM_PLUGIN_PATH="${HERE}/usr/plugins/platforms"\nexport XDG_DATA_DIRS="${HERE}/usr/share:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"\nexport PATH="${HERE}/usr/bin:${PATH}"\nexec "${HERE}/usr/bin/azkar_reminder" "$@"\n' > AppDir/AppRun
-        chmod +x AppDir/AppRun
-
-        # ── 6. Pack into AppImage ─────────────────────────────────────────────
-        echo "Downloading appimagetool..."
-        wget -q "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage" \
-          -O appimagetool
-        chmod +x appimagetool
-        ARCH=x86_64 ./appimagetool --appimage-extract-and-run AppDir AzkarReminder-x86_64.AppImage
-
-        echo "=== AppImage built successfully ==="
-        ls -lh AzkarReminder-x86_64.AppImage
-
-    - name: Upload Linux AppImage
-      uses: actions/upload-artifact@v4
-      with:
-        name: AzkarReminder-Linux-AppImage
-        path: AzkarReminder-x86_64.AppImage
-
-  # ─────────────────────────────────────────────────────────────────────────────
-  # 3. macOS BUILD (Qt 6 + DMG)
-  # ─────────────────────────────────────────────────────────────────────────────
   build-macos:
-    name: macOS (Universal / x86_64 & arm64)
-    runs-on: macos-latest
-
+    name: macOS universal candidate
+    runs-on: macos-14
+    env:
+      MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+      - name: Install official Qt SDK
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.3'
+          arch: clang_64
+          cache: true
+      - name: Configure and build both architectures
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_QT_APP=ON -DBUILD_TESTING=ON \
+            '-DCMAKE_OSX_ARCHITECTURES=x86_64;arm64' -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0
+          cmake --build build --parallel 4
+          ctest --test-dir build --output-on-failure
+      - name: Import signing certificate and notarization credentials
+        if: env.MACOS_SIGNING_IDENTITY != ''
+        env:
+          CERTIFICATE_BASE64: ${{ secrets.MACOS_CERTIFICATE_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.MACOS_KEYCHAIN_PASSWORD }}
+          APPLE_ID: ${{ secrets.MACOS_APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.MACOS_APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.MACOS_APP_PASSWORD }}
+        run: |
+          certificate="$RUNNER_TEMP/signing.p12"
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          printf '%s' "$CERTIFICATE_BASE64" | base64 --decode > "$certificate"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$keychain"
+          security import "$certificate" -P "$CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$keychain"
+          security list-keychains -d user -s "$keychain"
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$keychain"
+          xcrun notarytool store-credentials azkar-ci --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD" --keychain "$keychain"
+          echo 'MACOS_NOTARY_PROFILE=azkar-ci' >> "$GITHUB_ENV"
+          echo "MACOS_NOTARY_KEYCHAIN=$keychain" >> "$GITHUB_ENV"
+      - name: Deploy Qt, verify architectures and package DMG
+        run: bash scripts/package_macos.sh build release
+      - name: Mount DMG and run the deployed Cocoa application
+        timeout-minutes: 5
+        run: bash scripts/smoke_macos.sh release/*.dmg
+      - name: Remove signing material
+        if: always() && env.MACOS_SIGNING_IDENTITY != ''
+        run: |
+          security delete-keychain "$RUNNER_TEMP/signing.keychain-db"
+          rm -f "$RUNNER_TEMP/signing.p12"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AzkarReminder-macOS-DMG
+          path: release/*.dmg*
+          if-no-files-found: error
 
-    - name: Install Qt 6 via Homebrew
-      run: |
-        brew install qt@6 ninja
-        brew link --force qt@6
-
-    - name: Configure CMake
-      run: |
-        cmake -S . -B build -G Ninja \
-          -DCMAKE_BUILD_TYPE=Release \
-          -DCMAKE_PREFIX_PATH="$(brew --prefix qt@6)" \
-          -DBUILD_QT_APP=ON
-
-    - name: Build
-      run: cmake --build build --config Release
-
-    - name: Run Core Unit Tests
-      run: ./build/azkar_core_tests
-
-    - name: Debug — find built app bundles
-      run: |
-        echo "=== Contents of build/ ==="
-        ls -la build/
-        echo ""
-        echo "=== All .app bundles found ==="
-        find build -name "*.app" -maxdepth 4 -type d
-        echo ""
-        echo "=== All executables in build/ ==="
-        find build -maxdepth 3 -type f -perm +111 | head -20
-
-    - name: Package macOS App Bundle into DMG
-      run: |
-        set -e  # Fail on any error
-
-        # ── 1. Locate the .app bundle (try multiple name variants) ────────────
-        APP_PATH=""
-        for candidate in \
-          "build/Azkar Reminder.app" \
-          "build/azkar_reminder.app" \
-          "build/AzkarReminder.app" \
-          "build/azkar-reminder.app"; do
-          if [ -d "${candidate}" ]; then
-            APP_PATH="${candidate}"
-            echo "Found app bundle at: ${APP_PATH}"
-            break
-          fi
-        done
-
-        if [ -z "${APP_PATH}" ]; then
-          echo "ERROR: No .app bundle found in build/! Listing build/ contents:"
-          find build -maxdepth 3
-          exit 1
-        fi
-
-        # ── 2. Create native macOS .icns icon from logo.png ──────────────────
-        if [ -f "assets/images/logo.png" ]; then
-          mkdir -p azkar.iconset
-          sips -z 16   16   assets/images/logo.png --out azkar.iconset/icon_16x16.png
-          sips -z 32   32   assets/images/logo.png --out azkar.iconset/icon_16x16@2x.png
-          sips -z 32   32   assets/images/logo.png --out azkar.iconset/icon_32x32.png
-          sips -z 64   64   assets/images/logo.png --out azkar.iconset/icon_32x32@2x.png
-          sips -z 128  128  assets/images/logo.png --out azkar.iconset/icon_128x128.png
-          sips -z 256  256  assets/images/logo.png --out azkar.iconset/icon_128x128@2x.png
-          sips -z 256  256  assets/images/logo.png --out azkar.iconset/icon_256x256.png
-          sips -z 512  512  assets/images/logo.png --out azkar.iconset/icon_256x256@2x.png
-          sips -z 512  512  assets/images/logo.png --out azkar.iconset/icon_512x512.png
-          sips -z 1024 1024 assets/images/logo.png --out azkar.iconset/icon_512x512@2x.png
-          mkdir -p "${APP_PATH}/Contents/Resources"
-          iconutil -c icns azkar.iconset -o "${APP_PATH}/Contents/Resources/AzkarReminder.icns"
-          rm -rf azkar.iconset
-          echo "Icon generated successfully"
-        fi
-
-        # ── 3. Bundle app resources ───────────────────────────────────────────
-        mkdir -p "${APP_PATH}/Contents/Resources/audio"
-        mkdir -p "${APP_PATH}/Contents/Resources/fonts"
-        [ -f assets/content.md ]              && cp assets/content.md              "${APP_PATH}/Contents/Resources/"
-        [ -f assets/audio/diode_matrix.mp3 ]  && cp assets/audio/diode_matrix.mp3  "${APP_PATH}/Contents/Resources/audio/"
-        [ -f assets/fonts/Cairo-Regular.ttf ] && cp assets/fonts/Cairo-Regular.ttf "${APP_PATH}/Contents/Resources/fonts/"
-
-        # ── 4. Deploy Qt dependencies into bundle ─────────────────────────────
-        echo "Running macdeployqt on: ${APP_PATH}"
-        macdeployqt "${APP_PATH}" -verbose=1
-
-        # Copy any transitive Homebrew dylibs that macdeployqt may have missed
-        for dylib in libbrotlicommon libbrotlidec libsharpyuv libwebp libwebpdemux libwebpmux; do
-          find /opt/homebrew/lib -name "${dylib}*.dylib" -exec cp -f {} "${APP_PATH}/Contents/Frameworks/" \; 2>/dev/null || true
-        done
-
-        # Fix rpath for all dylibs in Frameworks
-        find "${APP_PATH}/Contents/Frameworks" -type f \( -name "*.dylib" -o -name "*.so" \) | while read -r lib; do
-          install_name_tool -id "@rpath/$(basename "$lib")" "$lib" 2>/dev/null || true
-        done
-        install_name_tool -add_rpath "@executable_path/../Frameworks" "${APP_PATH}/Contents/MacOS/Azkar Reminder" 2>/dev/null || true
-
-        # Clean extended attributes
-        xattr -cr "${APP_PATH}" 2>/dev/null || true
-
-        # ── 5. Ad-hoc Code Sign inside-out (no --options runtime to avoid Notarization demand) ─
-        echo "Ad-hoc signing all dylibs and frameworks..."
-        find "${APP_PATH}/Contents/Frameworks" -type f \( -name "*.dylib" -o -name "*.so" \) \
-          -exec codesign --force --sign - {} \; 2>/dev/null || true
-        find "${APP_PATH}/Contents/Frameworks" -type d -name "*.framework" \
-          -exec codesign --force --sign - {} \; 2>/dev/null || true
-        find "${APP_PATH}/Contents/PlugIns" -type f \( -name "*.dylib" -o -name "*.so" \) \
-          -exec codesign --force --sign - {} \; 2>/dev/null || true
-        
-        codesign --force --sign - "${APP_PATH}/Contents/MacOS/Azkar Reminder"
-        codesign --force --deep --sign - "${APP_PATH}"
-        codesign --verify --deep --strict --verbose=2 "${APP_PATH}" || true
-        echo "Code signing complete"
-
-        # ── 6. Build DMG with /Applications symlink & One-Click Fix Script ────
-        mkdir -p dmg_staging
-        cp -R "${APP_PATH}" "dmg_staging/Azkar Reminder.app"
-        ln -s /Applications dmg_staging/Applications
-
-        # Helper script inside DMG to remove quarantine with a single double-click
-        printf '#!/bin/bash\nDIR="$(cd "$(dirname "$0")" && pwd)"\necho "Removing macOS quarantine for Azkar Reminder..."\nxattr -cr "/Applications/Azkar Reminder.app" 2>/dev/null || xattr -cr "$DIR/Azkar Reminder.app" 2>/dev/null\necho "Done! Opening Azkar Reminder..."\nopen "/Applications/Azkar Reminder.app" 2>/dev/null || open "$DIR/Azkar Reminder.app" 2>/dev/null\n' > "dmg_staging/Fix-Permissions.command"
-        chmod +x "dmg_staging/Fix-Permissions.command"
-
-        hdiutil create \
-          -volname "Azkar Reminder" \
-          -srcfolder dmg_staging \
-          -ov -format UDZO \
-          "AzkarReminder-macOS.dmg"
-        rm -rf dmg_staging
-
-        echo "=== DMG built successfully ==="
-        ls -lh AzkarReminder-macOS.dmg
-
-    - name: Upload macOS DMG
-      uses: actions/upload-artifact@v4
-      with:
-        name: AzkarReminder-macOS-DMG
-        path: "AzkarReminder-macOS.dmg"
-
-  # ─────────────────────────────────────────────────────────────────────────────
-  # 4. GITHUB RELEASE
-  # ─────────────────────────────────────────────────────────────────────────────
   release:
-    name: Publish GitHub Release
-    needs: [build-windows, build-linux, build-macos]
+    name: Create release draft
+    needs: [build-windows, check-windows-qt, build-linux, build-macos]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
       contents: write
-
     steps:
-    - name: Download all build artifacts
-      uses: actions/download-artifact@v4
-
-    - name: Create GitHub Release
-      uses: softprops/action-gh-release@v1
-      with:
-        draft: false
-        prerelease: false
-        name: "Azkar Reminder ${{ github.ref_name }}"
-        body: |
-          ## Azkar Reminder ${{ github.ref_name }}
-
-          > بسم الله الرحمن الرحيم — تطبيق مكتب سطح مكتب هادئ وعصري للتذكير بالأذكار اليومية
-
-          ### 📥 روابط التثبيت المباشر
-
-          | Platform | File | Size |
-          |----------|------|------|
-          | 🪟 **Windows** (مُثبّت كلاسيكي Setup EXE) | `AzkarReminder-Windows-Setup.exe` | ~16 MB |
-          | 🏪 **Windows** (حزمة مايكروسوفت ستور MSIX) | `AzkarReminder-1.2.4.msix` | ~14 MB |
-          | 🐧 **Linux** (Ubuntu, Fedora, Arch, etc.) | `AzkarReminder-x86_64.AppImage` | ~60 MB |
-          | 🍎 **macOS** (Apple Silicon & Intel, macOS 11+) | `AzkarReminder-macOS.dmg` | ~38 MB |
-
-          ---
-
-          ### 🍎 macOS — خطوات التثبيت وتشغيل التطبيق
-
-          > ⚠️ **مهم**: macOS يضع ملفات التحميل في وضع الحجر الصحي (Gatekeeper Quarantine). لتشغيل التطبيق بسهولة:
-
-          **الطريقة الأولى (الأسل والأسرع):**
-          1. افتح ملف `AzkarReminder-macOS.dmg`.
-          2. اسحب `Azkar Reminder.app` إلى مجلد `Applications`.
-          3. اضغط مرتين على ملف **`Fix-Permissions.command`** الموجود داخل الـ DMG نفسه لإزالة الحظر وفتح التطبيق فوراً.
-
-          **الطريقة الثانية (عبر الـ Terminal):**
-          افتح الـ Terminal ونفذ الأمر التالي:
-          ```bash
-          xattr -cr "/Applications/Azkar Reminder.app"
-          ```
-          ثم افتح التطبيق من Launchpad أو مجلد التطبيقات.
-
-          ---
-
-          ### 🐧 Linux — خطوات التثبيت
-
-          1. حمّل `AzkarReminder-x86_64.AppImage`.
-          2. اجعل الملف قابلاً للتشغيل:
-          ```bash
-          chmod +x AzkarReminder-x86_64.AppImage
-          ```
-          3. شغّل التطبيق:
-          ```bash
-          ./AzkarReminder-x86_64.AppImage
-          ```
-
-          ---
-
-          ### 🪟 Windows — خيارات التثبيت
-
-          **الخيار الأول: المثبت الكلاسيكي (Setup.exe):**
-          1. حمّل `AzkarReminder-Windows-Setup.exe`.
-          2. شغّل المثبت وسيتم التثبيت وإضافة الأيقونة لشريط المهام (System Tray).
-
-          **الخيار الثاني: حزمة مايكروسوفت ستور (MSIX):**
-          - **لنشر التطبيق على متجر مايكروسوفت**: يتم رفع ملف `AzkarReminder-1.2.4.msix` إلى حسابك في Microsoft Partner Center.
-          - **للتجربة والتثبيت المباشر على ويندوز 10/11**:
-            1. حمّل شهادة التطوير المرفقة `AzkarReminder-DeveloperCert.cer`.
-            2. افتحها واختر **Install Certificate** -> **Local Machine** -> ضعها في **Trusted People**.
-            3. اضغط مرتين على `AzkarReminder-1.2.4.msix` وسيقوم Windows بتثبيته بنقرة زر واحدة.
-        files: |
-          AzkarReminder-Windows-Packages/*
-          AzkarReminder-Linux-AppImage/*
-          AzkarReminder-macOS-DMG/*
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/download-artifact@v4
+      - uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          prerelease: true
+          name: Azkar Reminder ${{ github.ref_name }}
+          files: |
+            AzkarReminder-Windows-Packages/*
+            AzkarReminder-Linux-AppImage/*
+            AzkarReminder-macOS-DMG/*

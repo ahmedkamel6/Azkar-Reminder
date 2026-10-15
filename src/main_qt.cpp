@@ -1,9 +1,13 @@
 #include <QApplication>
-#include <QCoreApplication>
 #include <QFontDatabase>
-#include <QDir>
-#include <iostream>
-
+#include <QIcon>
+#include <QLockFile>
+#include <QLocalServer>
+#include <QLocalSocket>
+#include <QCryptographicHash>
+#include <QMessageBox>
+#include <QLocale>
+#include <QTimer>
 #include "core/PlatformPaths.h"
 #include "core/Logger.h"
 #include "core/Settings.h"
@@ -11,119 +15,98 @@
 #include "core/ContentEngine.h"
 #include "core/Scheduler.h"
 #include "core/Localization.h"
-
+#include "core/Utf8.h"
 #include "ui/qt/MainWindow.h"
 #include "ui/qt/TrayController.h"
-#include "ui/qt/ThemeManager.h"
 
 int main(int argc, char* argv[]) {
     QApplication app(argc, argv);
     app.setApplicationName("Azkar Reminder");
-    app.setApplicationVersion("1.2.4");
+    app.setApplicationVersion(AZKAR_APP_VERSION);
     app.setOrganizationName("Azkar");
+    app.setWindowIcon(QIcon(":/azkar/images/logo.png"));
     app.setQuitOnLastWindowClosed(false);
-
-    bool startInBackground = false;
-    for (int i = 1; i < argc; ++i) {
-        std::string arg = argv[i];
-        if (arg == "--background" || arg == "-b") {
-            startInBackground = true;
-        }
+    const auto arguments = app.arguments();
+    const bool background = arguments.contains("--background") || arguments.contains("-b");
+    const bool quit = arguments.contains("--quit");
+    if (!dhikr::PlatformPaths::EnsureDirectoriesExist()) {
+        QMessageBox::critical(nullptr, "Azkar Reminder", "Could not create the application's data directories.");
+        return 1;
     }
-
-    // 1. Initialize Directories & Logging
-    dhikr::PlatformPaths::EnsureDirectoriesExist();
+    const auto config = dhikr::PlatformPaths::GetConfigDir();
+    const auto configUtf8 = config.u8string();
+    const auto configName = QString::fromUtf8(reinterpret_cast<const char*>(configUtf8.data()), static_cast<int>(configUtf8.size()));
+    QLockFile lock(configName + "/instance.lock");
+    lock.setStaleLockTime(0);
+    const auto serverName = "AzkarReminder-" + QCryptographicHash::hash(configName.toUtf8(), QCryptographicHash::Sha256).toHex().left(24);
+    if (!lock.tryLock()) {
+        if (lock.error() != QLockFile::LockFailedError) return 1;
+        QLocalSocket socket;
+        socket.connectToServer(QString::fromLatin1(serverName));
+        if (!socket.waitForConnected(1500)) return 1;
+        const QByteArray request = quit ? "quit\n" : background ? "background\n" : "show\n";
+        if (socket.write(request) != request.size()) return 1;
+        if (socket.bytesToWrite() && !socket.waitForBytesWritten(1500)) return 1;
+        if (!socket.canReadLine() && !socket.waitForReadyRead(1500)) return 1;
+        return socket.readLine().trimmed() == "ok" ? 0 : 1;
+    }
+    if (quit) return 0;
+    QLocalServer::removeServer(QString::fromLatin1(serverName));
+    QLocalServer server;
     dhikr::Logger::Instance().Initialize(dhikr::PlatformPaths::GetLogsDir());
-    LOG_INFO("Starting Azkar Reminder v1.2.4 (Qt 6 Cross-Platform)");
-
-    // 1.5 Load bundled Cairo Arabic font if present
-    QString appDir = QCoreApplication::applicationDirPath();
-    QStringList fontCandidates = {
-        appDir + "/../Resources/fonts/Cairo-Regular.ttf",
-        appDir + "/../share/azkar-reminder/fonts/Cairo-Regular.ttf",
-        appDir + "/fonts/Cairo-Regular.ttf",
-        "assets/fonts/Cairo-Regular.ttf"
-    };
-    for (const QString& fontPath : fontCandidates) {
-        if (QFile::exists(fontPath)) {
-            QFontDatabase::addApplicationFont(fontPath);
-            break;
+    LOG_INFO(std::string("Starting Azkar Reminder ") + AZKAR_APP_VERSION);
+    if (QFontDatabase::addApplicationFont(":/azkar/fonts/cairo.ttf") < 0) LOG_WARN("Bundled Cairo font could not be loaded");
+    if (!dhikr::Settings::Instance().Load(config)) {
+        // Preserve malformed settings before an explicit user change creates a replacement.
+        if (!dhikr::Settings::Instance().BackupInvalidFile()) { LOG_ERROR("Could not preserve malformed settings"); return 1; }
+        LOG_WARN("Malformed settings backed up; defaults are active");
+        if (!dhikr::Settings::Instance().Save()) LOG_WARN("Default settings could not be persisted");
+    }
+    auto language = dhikr::Settings::Instance().GetCopy().language;
+    if (language == L"system") language = QLocale::system().language() == QLocale::Arabic ? L"ar" : L"en";
+    dhikr::Localization::Instance().SetLanguage(language);
+    app.setLayoutDirection(language == L"ar" ? Qt::RightToLeft : Qt::LeftToRight);
+    if (!dhikr::Database::Instance().Open(dhikr::PlatformPaths::GetDataDir() / "history.db")) LOG_WARN("History database is unavailable");
+    auto& content = dhikr::ContentEngine::Instance();
+    const auto contentPath = dhikr::PlatformPaths::GetDataDir() / "content.json";
+    content.SetSavePath(contentPath);
+    const bool hasContent = std::filesystem::exists(contentPath);
+    if (!hasContent || content.Load(contentPath) != dhikr::ContentLoadResult::Success) {
+        if (hasContent) { LOG_ERROR("User library could not be loaded; original file retained"); return 1; }
+        content.LoadFromResource();
+        if (!content.Save()) LOG_WARN("Default library could not be persisted");
+    }
+    dhikr::qt::MainWindow window;
+    dhikr::qt::TrayController tray(&window);
+    window.SetTrayController(&tray);
+    QObject::connect(&server, &QLocalServer::newConnection, &window, [&] {
+        while (server.hasPendingConnections()) {
+            auto* socket = server.nextPendingConnection();
+            const auto readRequest = [socket, &window] {
+                if (!socket->canReadLine()) return;
+                const auto request = socket->readLine().trimmed();
+                if (request != "quit" && request != "show" && request != "background") { socket->disconnectFromServer(); return; }
+                if (request == "show") { window.showNormal(); window.raise(); window.activateWindow(); }
+                socket->write("ok\n");
+                socket->flush();
+                socket->disconnectFromServer();
+                // quit() before app.exec() has no effect. Queue shutdown after
+                // acknowledging the request, including Cocoa startup events.
+                if (request == "quit") QTimer::singleShot(0, qApp, [] { QApplication::quit(); });
+            };
+            QObject::connect(socket, &QLocalSocket::readyRead, &window, readRequest);
+            QObject::connect(socket, &QLocalSocket::disconnected, socket, &QObject::deleteLater);
+            // A fast client can send its request before newConnection is handled.
+            // readyRead is not emitted again for bytes already in the buffer.
+            if (socket->canReadLine()) readRequest();
         }
-    }
-
-    // 2. Load Settings & Localization
-    dhikr::Settings::Instance().Load(dhikr::PlatformPaths::GetConfigDir());
-    dhikr::Localization::Instance().SetLanguage(
-        dhikr::Settings::Instance().Get().language == L"en" ? L"en" : L"ar"
-    );
-
-    if (dhikr::Localization::Instance().IsRTL()) {
-        QApplication::setLayoutDirection(Qt::RightToLeft);
-    } else {
-        QApplication::setLayoutDirection(Qt::LeftToRight);
-    }
-
-    // 3. Initialize Database
-    auto dbPath = dhikr::PlatformPaths::GetDataDir() / "history.db";
-    dhikr::Database::Instance().Open(dbPath);
-
-    // 4. Load Dhikr Content (with persistent user content.json and embedded fallback)
-    auto userContentJson = dhikr::PlatformPaths::GetDataDir() / "content.json";
-    dhikr::ContentEngine::Instance().SetSavePath(userContentJson);
-
-    dhikr::ContentLoadResult loadRes = dhikr::ContentLoadResult::FileNotFound;
-    if (std::filesystem::exists(userContentJson)) {
-        loadRes = dhikr::ContentEngine::Instance().Load(userContentJson);
-    }
-
-    if (loadRes != dhikr::ContentLoadResult::Success || dhikr::ContentEngine::Instance().IsEmpty()) {
-        std::filesystem::path appDirPath(appDir.toStdString());
-        std::vector<std::filesystem::path> mdCandidates = {
-            dhikr::PlatformPaths::GetDataDir() / "content.md",
-            appDirPath / ".." / "Resources" / "content.md",
-            appDirPath / ".." / "share" / "azkar-reminder" / "content.md",
-            appDirPath / "assets" / "content.md",
-            appDirPath / "content.md",
-            "assets/content.md",
-            "content.md"
-        };
-
-        for (const auto& candidate : mdCandidates) {
-            if (std::filesystem::exists(candidate)) {
-                loadRes = dhikr::ContentEngine::Instance().Load(candidate);
-                if (loadRes == dhikr::ContentLoadResult::Success && !dhikr::ContentEngine::Instance().IsEmpty()) {
-                    break;
-                }
-            }
-        }
-
-        if (loadRes != dhikr::ContentLoadResult::Success || dhikr::ContentEngine::Instance().IsEmpty()) {
-            loadRes = dhikr::ContentEngine::Instance().LoadFromResource();
-        }
-
-        if (loadRes == dhikr::ContentLoadResult::Success && !dhikr::ContentEngine::Instance().IsEmpty()) {
-            dhikr::ContentEngine::Instance().Save();
-        }
-    }
-
-    // 5. Create UI & Tray
-    dhikr::qt::MainWindow mainWindow;
-    dhikr::qt::TrayController trayController(&mainWindow);
-    mainWindow.SetTrayController(&trayController);
-
-    trayController.Show();
-
-    if (!startInBackground) {
-        mainWindow.show();
-    }
-
-    LOG_INFO("Application event loop started");
-    int exitCode = app.exec();
-
-    // 6. Graceful cleanup
+    });
+    tray.Show();
+    if (!background || !tray.IsAvailable()) window.show();
+    // Publish readiness after construction and Cocoa window/tray startup.
+    if (!server.listen(QString::fromLatin1(serverName))) return 1;
+    const int result = app.exec();
     dhikr::Scheduler::Instance().Stop();
     dhikr::Database::Instance().Close();
-    LOG_INFO("Application exited cleanly with code: " + std::to_string(exitCode));
-
-    return exitCode;
+    return result;
 }

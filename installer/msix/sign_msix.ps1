@@ -1,24 +1,24 @@
-$certSubject = "CN=Ahmed Mohamed Kamel"
-$cert = Get-ChildItem Cert:\CurrentUser\My | Where-Object { $_.Subject -eq $certSubject } | Select-Object -First 1
-
-if (!$cert) {
-    Write-Host "Creating self-signed code signing certificate..."
-    $cert = New-SelfSignedCertificate `
-        -Type Custom `
-        -Subject $certSubject `
-        -DnsName "AzkarReminder" `
-        -KeyUsage DigitalSignature `
-        -FriendlyName "Azkar Reminder Developer Certificate" `
-        -CertStoreLocation "Cert:\CurrentUser\My" `
-        -TextExtension @("2.5.29.37={text}1.3.6.1.5.5.7.3.3")
-}
-
-Write-Host "Certificate Thumbprint: $($cert.Thumbprint)"
-
-$cerPath = "release\AzkarReminder-DeveloperCert.cer"
-Export-Certificate -Cert $cert -FilePath $cerPath -Force | Out-Null
-Write-Host "Exported CER to: $cerPath"
-
-$signtool = "C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\signtool.exe"
-& $signtool sign /fd SHA256 /a /sha1 $cert.Thumbprint "release\AzkarReminder-1.2.4.msix"
-Write-Host "MSIX signed successfully!"
+[CmdletBinding()]
+param(
+    [Parameter(Mandatory)][string]$PackagePath,
+    [Parameter(Mandatory)][string]$CertificateThumbprint
+)
+$ErrorActionPreference = 'Stop'
+$PackagePath = (Resolve-Path -LiteralPath $PackagePath).Path
+$certificate = Get-Item -LiteralPath "Cert:\CurrentUser\My\$CertificateThumbprint"
+if (!$certificate.HasPrivateKey) { throw 'The signing certificate has no private key.' }
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+$archive = [IO.Compression.ZipFile]::OpenRead($PackagePath)
+try {
+    $reader = [IO.StreamReader]::new($archive.GetEntry('AppxManifest.xml').Open())
+    try { [xml]$manifest = $reader.ReadToEnd() } finally { $reader.Dispose() }
+} finally { $archive.Dispose() }
+if ($certificate.Subject -ne $manifest.Package.Identity.Publisher) { throw 'Certificate Subject does not match the package Publisher.' }
+$signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" -ErrorAction SilentlyContinue |
+    Sort-Object FullName -Descending | Select-Object -First 1 -ExpandProperty FullName
+if (!$signtool) { throw 'Install the Windows SDK: signtool.exe was not found.' }
+& $signtool sign /fd SHA256 /sha1 $certificate.Thumbprint $PackagePath
+if ($LASTEXITCODE -ne 0) { throw "MSIX signing failed with exit code $LASTEXITCODE" }
+$digest = (Get-FileHash -LiteralPath $PackagePath -Algorithm SHA256).Hash.ToLowerInvariant()
+[IO.File]::WriteAllText("$PackagePath.sha256", "$digest  $([IO.Path]::GetFileName($PackagePath))`n", [Text.UTF8Encoding]::new($false))
+Write-Host "Signed $PackagePath. Trust and installation were not changed."

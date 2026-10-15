@@ -62,14 +62,14 @@ namespace Accent {
     inline ColorTheme ToTheme() { return s_toTheme; }
 
     inline bool IsAppPaused() {
-        const auto& s = Settings::Instance().Get();
+        const auto s = Settings::Instance().GetCopy();
         if (!s.remindersEnabled || s.paused) return true;
         if (s.pauseUntilUnix > 0 && time(nullptr) < s.pauseUntilUnix) return true;
         return false;
     }
 
     inline ColorTheme CurrentTheme() {
-        return Settings::Instance().Get().colorTheme;
+        return Settings::Instance().GetCopy().colorTheme;
     }
 
     inline D2D1_COLOR_F GetThemePrimary(ColorTheme theme, float alpha = 1.0f) {

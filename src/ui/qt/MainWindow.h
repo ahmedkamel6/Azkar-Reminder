@@ -50,6 +50,7 @@ private slots:
     void OnDeleteSelectedDhikr();
 
 private:
+    bool HasActiveReminder() const;
     void SetupUi();
     void SetupSidebar();
     void PopulateLibraryList();
@@ -67,6 +68,9 @@ private:
     std::unique_ptr<IAutoStart>          m_autoStart;
     std::unique_ptr<IAudioEngine>        m_audioEngine;
     std::unique_ptr<IFullScreenDetector> m_fsDetector;
+    std::vector<std::unique_ptr<PopupWindow>> m_secondaryPopups;
+    bool m_pendingFullscreen = false;
+    bool m_notificationPending = false;
 
     // UI Structure
     QListWidget*    m_navRail = nullptr;
@@ -82,7 +86,6 @@ private:
     QTimer*      m_statTimer = nullptr;
 
     // Reminders Page Widgets
-    QComboBox*  m_comboInterval = nullptr;
     QCheckBox*  m_chkQuietHours = nullptr;
     QTimeEdit*  m_timeQuietStart = nullptr;
     QTimeEdit*  m_timeQuietEnd = nullptr;

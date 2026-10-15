@@ -73,8 +73,8 @@ if %ERRORLEVEL% neq 0 (
     exit /b 1
 )
 
-if not exist "release\AzkarReminder-Setup-v1.1.0.exe" (
-    echo Error: release\AzkarReminder-Setup-v1.1.0.exe not found after compilation.
+if not exist "release\AzkarReminder-Windows-Setup.exe" (
+    echo Error: release\AzkarReminder-Windows-Setup.exe not found after compilation.
     exit /b 1
 )
 
@@ -83,7 +83,7 @@ echo ===================================================
 echo   BUILD AND INSTALLER COMPLETED SUCCESSFULLY!
 echo ===================================================
 echo   Executable: %CD%\build\bin\Release\AzkarReminder.exe
-echo   Installer:  %CD%\release\AzkarReminder-Setup-v1.1.0.exe
+echo   Installer:  %CD%\release\AzkarReminder-Windows-Setup.exe
 echo ===================================================
 
 exit /b 0

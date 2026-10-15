@@ -4,6 +4,8 @@
 #include <QSystemTrayIcon>
 #include <QMenu>
 #include <QAction>
+#include <functional>
+#include "../../core/ContentEngine.h"
 
 namespace dhikr::qt {
 
@@ -19,6 +21,9 @@ public:
     void Show();
     void UpdateStatusTooltip();
     void UpdateTrayIcon();
+    bool IsAvailable() const;
+    void Retranslate();
+    void NotifyReminder(const ContentItem& item, std::function<void(bool)> completed);
 
 signals:
     void TriggerReminderRequested();

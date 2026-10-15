@@ -27,11 +27,11 @@ if not exist "build\bin\Release\audio\diode_matrix.mp3" (
 )
 
 :: 3. Check installer
-if not exist "release\AzkarReminder-Setup-v1.1.0.exe" (
-    echo [FAIL] release\AzkarReminder-Setup-v1.1.0.exe is missing. Run build_release.bat to generate it.
+if not exist "release\AzkarReminder-Windows-Setup.exe" (
+    echo [FAIL] release\AzkarReminder-Windows-Setup.exe is missing. Run build_release.bat to generate it.
     set FAILED=1
 ) else (
-    echo [PASS] Official Windows Installer AzkarReminder-Setup-v1.1.0.exe found.
+    echo [PASS] Official Windows Installer AzkarReminder-Windows-Setup.exe found.
 )
 
 echo.

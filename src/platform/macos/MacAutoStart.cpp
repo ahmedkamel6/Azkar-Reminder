@@ -2,8 +2,12 @@
 #include "../../core/Logger.h"
 #include <fstream>
 #include <cstdlib>
+#include <sstream>
+#include <vector>
+#include "../../core/AtomicFile.h"
 
 #ifdef __APPLE__
+#include <mach-o/dyld.h>
 
 namespace dhikr {
 
@@ -40,17 +44,30 @@ bool MacAutoStart::SetAutoStartEnabled(bool enable, const std::filesystem::path&
 
     std::filesystem::path execPath = appPath;
     if (execPath.empty()) {
-        execPath = "/Applications/AzkarReminder.app/Contents/MacOS/AzkarReminder";
+        uint32_t size = 0;
+        _NSGetExecutablePath(nullptr, &size);
+        std::vector<char> buffer(size);
+        if (_NSGetExecutablePath(buffer.data(), &size) != 0) return false;
+        execPath = std::filesystem::weakly_canonical(buffer.data(), ec);
+        if (ec) return false;
     }
 
     auto parentDir = plistPath.parent_path();
     std::filesystem::create_directories(parentDir, ec);
+    if (ec) return false;
 
-    std::ofstream out(plistPath);
-    if (!out.is_open()) {
-        LOG_ERROR("Failed to create LaunchAgent plist file: " + plistPath.string());
-        return false;
+    std::string xmlPath;
+    for (char character : execPath.string()) {
+        switch (character) {
+            case '&': xmlPath += "&amp;"; break;
+            case '<': xmlPath += "&lt;"; break;
+            case '>': xmlPath += "&gt;"; break;
+            case '"': xmlPath += "&quot;"; break;
+            case '\'': xmlPath += "&apos;"; break;
+            default: xmlPath += character;
+        }
     }
+    std::ostringstream out;
 
     out << "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n";
     out << "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n";
@@ -60,7 +77,7 @@ bool MacAutoStart::SetAutoStartEnabled(bool enable, const std::filesystem::path&
     out << "    <string>com.azkar.reminder</string>\n";
     out << "    <key>ProgramArguments</key>\n";
     out << "    <array>\n";
-    out << "        <string>" << execPath.string() << "</string>\n";
+    out << "        <string>" << xmlPath << "</string>\n";
     out << "        <string>--background</string>\n";
     out << "    </array>\n";
     out << "    <key>RunAtLoad</key>\n";
@@ -69,9 +86,7 @@ bool MacAutoStart::SetAutoStartEnabled(bool enable, const std::filesystem::path&
     out << "    <false/>\n";
     out << "</dict>\n";
     out << "</plist>\n";
-    out.flush();
-
-    if (out.fail()) {
+    if (!WriteFileAtomically(plistPath, out.str())) {
         LOG_ERROR("Failed writing LaunchAgent plist data");
         return false;
     }

@@ -26,6 +26,12 @@ Scheduler& Scheduler::Instance() {
 
 void Scheduler::Start(TriggerCallback onTrigger) {
     if (m_running) return;
+    const auto settings = Settings::Instance().GetCopy();
+    m_pauseUntil = settings.paused && settings.pauseUntilUnix > time(nullptr) ? static_cast<time_t>(settings.pauseUntilUnix) : 0;
+    if (settings.paused && m_pauseUntil == 0) {
+        Settings::Instance().Modify([](AppSettings& current) { current.paused = false; current.pauseUntilUnix = 0; });
+        Settings::Instance().Save();
+    }
     m_onTrigger = std::move(onTrigger);
     m_recalcRequested = false;
     m_running = true;
@@ -81,6 +87,7 @@ void Scheduler::TriggerNow() {
 }
 
 void Scheduler::Pause(int durationMinutes) {
+    time_t until;
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         if (durationMinutes <= 0) {
@@ -88,34 +95,27 @@ void Scheduler::Pause(int durationMinutes) {
             time_t now = time(nullptr);
             struct tm lt;
             SafeLocalTime(&lt, &now);
-            lt.tm_hour = 23; lt.tm_min = 59; lt.tm_sec = 59;
+            ++lt.tm_mday;
+            lt.tm_hour = 0; lt.tm_min = 0; lt.tm_sec = 0; lt.tm_isdst = -1;
             m_pauseUntil = mktime(&lt);
         } else {
-            m_pauseUntil = time(nullptr) + durationMinutes * 60;
+            m_pauseUntil = time(nullptr) + static_cast<time_t>(std::clamp(durationMinutes, 1, 10080)) * 60;
         }
         m_state = ScheduleState::Paused;
+        until = m_pauseUntil;
     }
 
     // Persist pause state
-    auto& s = Settings::Instance().Get();
-    s.paused = true;
-    s.pauseUntilUnix = (int)m_pauseUntil;
+    Settings::Instance().Modify([until](AppSettings& settings) {
+        settings.paused = true; settings.pauseUntilUnix = static_cast<int64_t>(until);
+    });
     Settings::Instance().Save();
 
     Recalculate();
     LOG_INFO("Reminders paused for " + std::to_string(durationMinutes) + " minutes");
 }
 
-void Scheduler::PauseUntilTomorrow() {
-    time_t now = time(nullptr);
-    struct tm lt;
-    SafeLocalTime(&lt, &now);
-    // Midnight tomorrow
-    lt.tm_mday += 1;
-    lt.tm_hour = 0; lt.tm_min = 0; lt.tm_sec = 0;
-    int mins = (int)(mktime(&lt) - now) / 60;
-    Pause(mins);
-}
+void Scheduler::PauseUntilTomorrow() { Pause(0); }
 
 void Scheduler::Resume() {
     {
@@ -123,9 +123,7 @@ void Scheduler::Resume() {
         m_pauseUntil = 0;
         m_state = ScheduleState::Active;
     }
-    auto& s = Settings::Instance().Get();
-    s.paused = false;
-    s.pauseUntilUnix = 0;
+    Settings::Instance().Modify([](AppSettings& settings) { settings.paused = false; settings.pauseUntilUnix = 0; });
     Settings::Instance().Save();
     Recalculate();
     LOG_INFO("Reminders resumed");
@@ -156,6 +154,21 @@ void Scheduler::OnSystemWake() {
 void Scheduler::WorkerThread() {
     while (m_running) {
         try {
+            const auto now = time(nullptr);
+            bool pauseExpired = false;
+            {
+                std::lock_guard<std::mutex> lock(m_mutex);
+                if (m_pauseUntil != 0 && m_pauseUntil <= now) {
+                    m_pauseUntil = 0;
+                    pauseExpired = true;
+                }
+            }
+            if (pauseExpired) {
+                Settings::Instance().Modify([now](AppSettings& settings) {
+                    if (settings.pauseUntilUnix <= now) { settings.paused = false; settings.pauseUntilUnix = 0; }
+                });
+                Settings::Instance().Save();
+            }
             time_t nextFire = ComputeNextReminderTime();
             {
                 std::lock_guard<std::mutex> lock(m_mutex);
@@ -165,13 +178,13 @@ void Scheduler::WorkerThread() {
             std::unique_lock<std::mutex> lock(m_mutex);
             if (nextFire == 0) {
                 // No reminder scheduled in current window — sleep until wake or recalc
-                m_cv.wait(lock, [this]() { return !m_running || m_recalcRequested; });
+                m_cv.wait_for(lock, std::chrono::seconds(30), [this]() { return !m_running || m_recalcRequested; });
                 m_recalcRequested = false;
                 if (!m_running) break;
                 continue;
             }
 
-            auto targetPoint = std::chrono::system_clock::from_time_t(nextFire);
+            auto targetPoint = std::chrono::system_clock::from_time_t(std::min(nextFire, time(nullptr) + 30));
             bool timeoutReached = !m_cv.wait_until(lock, targetPoint, [this]() {
                 return !m_running || m_recalcRequested;
             });
@@ -183,29 +196,17 @@ void Scheduler::WorkerThread() {
                 continue;
             }
 
-            if (timeoutReached) {
-                bool pauseExpired = false;
-                if (m_pauseUntil != 0 && time(nullptr) >= m_pauseUntil) {
-                    m_pauseUntil = 0;
-                    m_state = ScheduleState::Active;
-                    pauseExpired = true;
-                }
-
+            if (timeoutReached && time(nullptr) >= nextFire) {
+                const bool pauseWake = m_pauseUntil != 0 && nextFire == m_pauseUntil;
                 bool isPaused = (m_pauseUntil != 0 && time(nullptr) < m_pauseUntil);
                 auto callback = m_onTrigger;
                 lock.unlock(); // Release mutex before calling Settings or dispatching UI callback
 
-                if (pauseExpired) {
-                    auto& s = Settings::Instance().Get();
-                    s.paused = false;
-                    s.pauseUntilUnix = 0;
-                    Settings::Instance().Save();
-                    Settings::Instance().NotifyChanged();
-                }
-
                 // Verify reminder can trigger
-                auto& s = Settings::Instance().Get();
-                if (s.remindersEnabled && !isPaused) {
+                const auto s = Settings::Instance().GetCopy();
+                const auto firedAt = time(nullptr);
+                struct tm fireLocal{}; SafeLocalTime(&fireLocal, &firedAt);
+                if (!pauseWake && s.remindersEnabled && !isPaused && firedAt - nextFire < 30 && !IsQuietTime(s, fireLocal)) {
                     time_t nowT = time(nullptr);
                     if (nowT - m_lastFiredTime.load() >= 20) {
                         m_lastFiredTime = nowT;
@@ -232,116 +233,66 @@ void Scheduler::WorkerThread() {
 }
 
 // ── Schedule calculation ─────────────────────────────────────────────────────
-time_t Scheduler::ComputeNextReminderTime() const {
-    auto s = Settings::Instance().GetCopy(); // thread-safe
-
-    if (!s.remindersEnabled) {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        const_cast<Scheduler*>(this)->m_state = ScheduleState::Disabled;
-        return 0;
-    }
-
-    // Check pause
-    if (m_pauseUntil != 0) {
-        time_t now = time(nullptr);
-        if (now < m_pauseUntil) {
-            std::lock_guard<std::mutex> lock(m_mutex);
-            const_cast<Scheduler*>(this)->m_state = ScheduleState::Paused;
-            return m_pauseUntil;
-        }
-    }
-
-    time_t now = time(nullptr);
-    struct tm lt;
-    SafeLocalTime(&lt, &now);
-
-    time_t nextFireTime = 0;
-
-    // Check from yesterday (overnight schedules) up to 7 days ahead
-    for (int daysAhead = -1; daysAhead <= 7; ++daysAhead) {
-        int searchDow = (lt.tm_wday + daysAhead) % 7;
-        if (searchDow < 0) searchDow += 7;
-
-        auto& ds = s.weeklySchedule[searchDow];
-        if (!ds.enabled) continue;
-
-        struct tm midnight = lt;
-        midnight.tm_mday += daysAhead;
-        midnight.tm_hour = 0; midnight.tm_min = 0; midnight.tm_sec = 0;
-        mktime(&midnight); // Normalize
-
-        int startMin = ds.startHour * 60 + ds.startMin;
-        int endMin = ds.endHour * 60 + ds.endMin;
-        int duration = (endMin > startMin) ? (endMin - startMin) : (24 * 60 - startMin + endMin);
-        if (duration == 0) duration = 24 * 60; // 00:00 to 00:00 means 24h
-
-        int freq = ds.frequencyMinutes;
-        if (freq <= 0) freq = 30;
-
-        for (int k = 0; ; ++k) {
-            int t = startMin + k * freq;
-            if (t >= startMin + duration) break; // Out of this day's window
-
-            struct tm fireTm = midnight;
-            fireTm.tm_min += t;
-            time_t fireTime = mktime(&fireTm);
-
-            if (fireTime > now) {
-                struct tm fireLt;
-                SafeLocalTime(&fireLt, &fireTime);
-                if (!IsQuietTime(s, fireLt)) {
-                    nextFireTime = fireTime;
-                    break;
-                }
-            }
-        }
-        if (nextFireTime != 0) break;
-    }
-
-    // Determine current state based on "now"
-    ScheduleState currentState = ScheduleState::OutOfWindow;
-    bool inWindow = false;
-    for (int daysAhead = -1; daysAhead <= 0; ++daysAhead) {
-        int searchDow = (lt.tm_wday + daysAhead) % 7;
-        if (searchDow < 0) searchDow += 7;
-        auto& ds = s.weeklySchedule[searchDow];
-        if (!ds.enabled) continue;
-
-        struct tm midnight = lt;
-        midnight.tm_mday += daysAhead;
-        midnight.tm_hour = 0; midnight.tm_min = 0; midnight.tm_sec = 0;
-        mktime(&midnight);
-
-        int startMin = ds.startHour * 60 + ds.startMin;
-        int endMin = ds.endHour * 60 + ds.endMin;
-        int duration = (endMin > startMin) ? (endMin - startMin) : (24 * 60 - startMin + endMin);
-        if (duration == 0) duration = 24 * 60;
-
-        struct tm startTm = midnight;
-        startTm.tm_min += startMin;
-        time_t absStart = mktime(&startTm);
-        time_t absEnd = absStart + duration * 60;
-
-        if (now >= absStart && now < absEnd) {
-            inWindow = true;
-            break;
-        }
-    }
-
-    if (inWindow) {
-        if (IsQuietTime(s, lt)) currentState = ScheduleState::QuietHours;
-        else currentState = ScheduleState::Active;
-    }
-
-    {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        const_cast<Scheduler*>(this)->m_state = currentState;
-    }
-
-    return nextFireTime;
+namespace {
+std::pair<time_t, time_t> DayWindow(const DaySchedule& day, tm today, int offset) {
+    today.tm_mday += offset;
+    today.tm_hour = day.startHour; today.tm_min = day.startMin; today.tm_sec = 0; today.tm_isdst = -1;
+    const auto start = mktime(&today);
+    if (day.endHour * 60 + day.endMin <= day.startHour * 60 + day.startMin) ++today.tm_mday;
+    today.tm_hour = day.endHour; today.tm_min = day.endMin; today.tm_isdst = -1;
+    return {start, mktime(&today)};
+}
 }
 
-bool Scheduler::IsQuietTime(const dhikr::AppSettings& s, const struct tm& lt) const {
+time_t Scheduler::NextReminder(const AppSettings& input, time_t now) {
+    auto settings = input;
+    Settings::Validate(settings);
+    if (!settings.remindersEnabled) return 0;
+    if (settings.paused && settings.pauseUntilUnix > now) return static_cast<time_t>(settings.pauseUntilUnix);
+    tm local{}; SafeLocalTime(&local, &now);
+    time_t earliest = 0;
+    for (int offset = -1; offset <= 7; ++offset) {
+        const auto& day = settings.weeklySchedule[(local.tm_wday + offset + 7) % 7];
+        if (!day.enabled) continue;
+        const auto [start, end] = DayWindow(day, local, offset);
+        const auto interval = static_cast<time_t>(day.frequencyMinutes) * 60;
+        auto candidate = start > now ? start : start + ((now - start) / interval + 1) * interval;
+        for (; candidate < end; candidate += interval) {
+            tm fireLocal{}; SafeLocalTime(&fireLocal, &candidate);
+            if (!IsQuietTime(settings, fireLocal)) {
+                if (earliest == 0 || candidate < earliest) earliest = candidate;
+                break;
+            }
+        }
+    }
+    return earliest;
+}
+
+time_t Scheduler::ComputeNextReminderTime() const {
+    const auto settings = Settings::Instance().GetCopy();
+    const auto now = time(nullptr);
+    tm local{}; SafeLocalTime(&local, &now);
+    auto state = ScheduleState::OutOfWindow;
+    if (!settings.remindersEnabled) state = ScheduleState::Disabled;
+    else if (IsQuietTime(settings, local)) state = ScheduleState::QuietHours;
+    else {
+        for (int offset = -1; offset <= 0; ++offset) {
+            const auto& day = settings.weeklySchedule[(local.tm_wday + offset + 7) % 7];
+            const auto [start, end] = DayWindow(day, local, offset);
+            if (day.enabled && now >= start && now < end) { state = ScheduleState::Active; break; }
+        }
+    }
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        // Pause/Resume can run after the settings snapshot was taken. Publish
+        // the current pause state while holding the same lock as those calls.
+        if (settings.remindersEnabled && m_pauseUntil > now) state = ScheduleState::Paused;
+        const_cast<Scheduler*>(this)->m_state = state;
+    }
+    return NextReminder(settings, now);
+}
+
+bool Scheduler::IsQuietTime(const dhikr::AppSettings& s, const struct tm& lt) {
     int nowMinutes = lt.tm_hour * 60 + lt.tm_min;
     for (auto& qp : s.quietPeriods) {
         int startMin = qp.startHour * 60 + qp.startMin;

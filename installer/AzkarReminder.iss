@@ -6,7 +6,7 @@
 ;        cmake --build build --config Release
 ;   3. Compile this script:
 ;        iscc installer\AzkarReminder.iss
-;   4. Output: release\AzkarReminder-Setup-v1.1.0.exe
+;   4. Output: release\AzkarReminder-Windows-Setup.exe
 ;
 ; RELEASE WORKFLOW:
 ;   1. Bump #define AppVersion below (e.g. 1.1.0)
@@ -14,15 +14,17 @@
 ;   3. Bump kVersion in src/core/ApplicationMetadata.h to match
 ;   4. Run scripts\build_release.bat
 ;   5. Create GitHub Release tag v1.1.0
-;   6. Upload release\AzkarReminder-Setup-v1.1.0.exe as the release asset
+;   6. Upload release\AzkarReminder-Windows-Setup.exe as the release asset
 
 #define AppName        "Azkar Reminder"
-#define AppVersion     "1.2.4"
+#define AppVersion     "1.2.5"
 #define AppPublisher   "Ahmed Mohamed Kamel"
-#define AppURL         "https://github.com/kamah/dhikr-reminder"
+#define AppURL         "https://github.com/ahmedkamel6/Azkar-Reminder"
 #define AppId          "{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}"
 #define AppUserModelID "AhmedMohamedKamel.AzkarReminder"
+#ifndef SourceExe
 #define SourceExe      "..\build\bin\Release\AzkarReminder.exe"
+#endif
 
 [Setup]
 AppId={{#AppId}
@@ -69,6 +71,9 @@ Name: "autostart"; Description: "Start Azkar Reminder automatically when Windows
 [Files]
 Source: "{#SourceExe}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\assets\audio\*"; DestDir: "{app}\audio"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\THIRD_PARTY_NOTICES.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\assets\licenses\Cairo-OFL.txt"; DestDir: "{app}\licenses"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\{#AppName}";           Filename: "{app}\AzkarReminder.exe"; IconFilename: "{app}\AzkarReminder.exe"; IconIndex: 0; AppUserModelID: "{#AppUserModelID}"

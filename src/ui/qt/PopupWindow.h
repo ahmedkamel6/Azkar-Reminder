@@ -8,6 +8,9 @@
 #include <QPropertyAnimation>
 #include <QParallelAnimationGroup>
 #include <QPointer>
+#include <QElapsedTimer>
+#include <QScrollArea>
+#include <QScreen>
 #include "../../core/ContentEngine.h"
 #include "../../core/Settings.h"
 
@@ -21,7 +24,8 @@ public:
     ~PopupWindow() override;
 
     // Show reminder popup with specified content item
-    void ShowReminder(const ContentItem& item);
+    void ShowReminder(const ContentItem& item, bool recordDelivery = true);
+    void SetTargetScreen(QScreen* screen) { m_screen = screen; }
 
     // Dismiss with exit animation
     void Dismiss();
@@ -54,6 +58,11 @@ private:
     QPushButton*  m_btnPause = nullptr;
     QPushButton*  m_btnClose = nullptr;
     QProgressBar* m_progress = nullptr;
+    QScrollArea* m_bodyScroll = nullptr;
+    QPointer<QScreen> m_screen;
+    QElapsedTimer m_elapsedTimer;
+    qint64 m_hoverStarted = 0;
+    qint64 m_hoverDuration = 0;
 
     // Animation & State
     QPointer<QParallelAnimationGroup> m_animGroup;

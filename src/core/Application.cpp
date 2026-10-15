@@ -58,8 +58,16 @@ bool Application::Initialize(HINSTANCE hInstance) {
     }
 
     // 3. Settings & Localization
-    Settings::Instance().Load(m_appDataPath);
-    std::wstring lang = Settings::Instance().Get().language;
+    if (!Settings::Instance().Load(m_appDataPath)) {
+        if (!Settings::Instance().BackupInvalidFile()) {
+            LOG_ERROR("Could not preserve malformed settings");
+            return false;
+        }
+        LOG_WARN("Malformed settings backed up; defaults are active");
+        if (!Settings::Instance().Save()) LOG_WARN("Default settings could not be persisted");
+    }
+    m_settingsReady = true;
+    std::wstring lang = Settings::Instance().GetCopy().language;
     if (lang == L"system") {
         lang = (PRIMARYLANGID(GetUserDefaultUILanguage()) == LANG_ARABIC) ? L"ar" : L"en";
     }
@@ -83,37 +91,25 @@ bool Application::Initialize(HINSTANCE hInstance) {
         ContentLoadResult loadResult = ContentLoadResult::FileNotFound;
         if (std::filesystem::exists(userContent)) {
             loadResult = ContentEngine::Instance().Load(userContent);
-            if (loadResult == ContentLoadResult::Success && !ContentEngine::Instance().IsEmpty()) {
+            if (loadResult == ContentLoadResult::Success) {
                 LOG_INFO("Loaded user content.json successfully (" + std::to_string(ContentEngine::Instance().Count()) + " items)");
-                // If user content was from older version (legacy 100 items and no custom items), auto-upgrade to new 500-item collection
-                bool hasCustom = false;
-                for (const auto& item : ContentEngine::Instance().GetAllItems()) {
-                    if (item.id.rfind("custom_", 0) == 0) {
-                        hasCustom = true;
-                        break;
-                    }
-                }
-                if (!hasCustom && ContentEngine::Instance().Count() != 108) {
-                    LOG_INFO("Migrating library (" + std::to_string(ContentEngine::Instance().Count()) + " items) to short concise collection (108 items)");
-                    loadResult = ContentLoadResult::EmptyContent; // Trigger reload from updated resource
-                }
             } else {
                 loadResult = ContentLoadResult::EmptyContent;
             }
         }
 
-        if (loadResult != ContentLoadResult::Success || ContentEngine::Instance().IsEmpty()) {
+        if (loadResult != ContentLoadResult::Success) {
             loadResult = ContentEngine::Instance().LoadFromMarkdownResource(m_hInstance, IDR_CONTENT_MD);
             if (loadResult == ContentLoadResult::Success && !ContentEngine::Instance().IsEmpty()) {
                 LOG_INFO("Loaded default content from embedded resource (" + std::to_string(ContentEngine::Instance().Count()) + " items)");
-                ContentEngine::Instance().Save(); // Persist initial database to user's AppData
+                if (!std::filesystem::exists(userContent)) ContentEngine::Instance().Save();
             } else {
                 LOG_ERROR("Failed to load embedded content resource. Ensure IDR_CONTENT_MD is properly compiled into the executable.");
             }
         }
 
         if (ContentEngine::Instance().IsEmpty()) {
-            LOG_ERROR("ContentEngine has 0 items loaded!");
+            LOG_INFO("Library is empty; automatic reminders have no content");
         }
     }
 
@@ -121,7 +117,7 @@ bool Application::Initialize(HINSTANCE hInstance) {
     AudioEngine::Instance().Initialize(m_hInstance);
 
     // 8. Sync startup registry with settings
-    SetStartWithWindows(Settings::Instance().Get().startWithWindows);
+    SetStartWithWindows(Settings::Instance().GetCopy().startWithWindows);
 
     m_initialized = true;
     return true;
@@ -190,13 +186,13 @@ bool Application::InitDirectX() {
 }
 
 int Application::Run() {
-    auto& settings = Settings::Instance().Get();
+    auto settings = Settings::Instance().GetCopy();
 
     // Show onboarding on first launch
     if (settings.firstLaunch) {
         OnboardingFlow onboarding;
         onboarding.Show(m_hInstance);
-        settings.firstLaunch = false;
+        Settings::Instance().Modify([](AppSettings& current) { current.firstLaunch = false; });
         Settings::Instance().Save();
     }
 
@@ -256,7 +252,7 @@ void Application::Shutdown() {
     Database::Instance().Checkpoint();
     Database::Instance().Close();
 
-    Settings::Instance().Save();
+    if (m_settingsReady) Settings::Instance().Save();
 
     if (m_dwriteFactory) { m_dwriteFactory->Release(); m_dwriteFactory = nullptr; }
     if (m_d2dFactory)    { m_d2dFactory->Release();    m_d2dFactory    = nullptr; }
@@ -271,13 +267,12 @@ void Application::Shutdown() {
 
 bool Application::SetStartWithWindows(bool enable) {
     HKEY hKey = nullptr;
-    LSTATUS status = RegOpenKeyExW(
-        HKEY_CURRENT_USER,
-        L"Software\\Microsoft\\Windows\\CurrentVersion\\Run",
-        0,
-        KEY_SET_VALUE,
-        &hKey
-    );
+    const wchar_t* runKey = L"Software\\Microsoft\\Windows\\CurrentVersion\\Run";
+    LSTATUS status = enable
+        ? RegCreateKeyExW(HKEY_CURRENT_USER, runKey, 0, nullptr, REG_OPTION_NON_VOLATILE,
+                          KEY_SET_VALUE, nullptr, &hKey, nullptr)
+        : RegOpenKeyExW(HKEY_CURRENT_USER, runKey, 0, KEY_SET_VALUE, &hKey);
+    if (!enable && status == ERROR_FILE_NOT_FOUND) return true;
     if (status != ERROR_SUCCESS) {
         LOG_ERROR("Failed to open HKCU Run registry key, status=" + std::to_string(status));
         return false;

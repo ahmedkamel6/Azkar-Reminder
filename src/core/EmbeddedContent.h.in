@@ -1,0 +1,4 @@
+#pragma once
+namespace dhikr {
+inline constexpr const char* kEmbeddedContentMd = R"AZKAR_MD(@AZKAR_CONTENT_MD@)AZKAR_MD";
+}

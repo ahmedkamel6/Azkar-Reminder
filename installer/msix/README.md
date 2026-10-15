@@ -1,43 +1,35 @@
-# Azkar Reminder - Microsoft Store Package (MSIX)
+# MSIX packaging
 
-حزمة التثبيت الرسمية لمتجر مايكروسوفت (Microsoft Store) و Windows 10 / Windows 11.
+الهوية الافتراضية مأخوذة من تسجيل المشروع في Partner Center:
 
----
+- Name: `15145Ahmedkamel.AzkarReminder`.
+- Publisher: `CN=BD257909-6037-4C23-A6F3-A71B4BD2AF69`.
+- PublisherDisplayName: `Ahmedkamel`.
 
-## 📦 الملفات الجاهزة في هذا المجلد
+لا تغيّر هذه القيم دون تغيير التسجيل المقابل. `AppxManifest.xml` والأصول مدمجة في المصدر. ملفات الإصدار 1.2.4 الموجودة تاريخيًا في هذا المجلد تخص ذلك الإصدار؛ الإصلاحات الجديدة لا تعيد كتابة تلك الملفات.
 
-- **`AzkarReminder-1.2.4.msix`**: ملف الحزمة الجاهز للرفع على Microsoft Partner Center أو للتثبيت المحلي (~13.4 ميجابايت).
-- **`AzkarReminder-DeveloperCert.cer`**: الشهادة الرقمية المخصصة لتثبيت الحزمة محلياً (Sideloading) بدون متجر.
-- **`AppxManifest.xml`**: ملف المانيفست الرسمي للتطبيق متضمن الهوية والصلاحيات والأيقونات.
-- **`build_msix.ps1`**: سكربت بناء الحزمة التلقائي عبر PowerShell وأدوات Windows SDK.
-- **`create_assets.ps1`**: سكربت توليد أيقونات المتجر بجميع المقاسات من الشعار الأصلي.
-- **`Assets/`**: مجلد الأيقونات والشاشات المجهزة بمقاسات المتجر.
+## Build
 
----
+شغّل من PowerShell مع MSVC وWindows SDK وCMake متوفرة:
 
-## 🏪 طريقة رفع الحزمة على متجر مايكروسوفت (Microsoft Store)
+```powershell
+./installer/msix/build_msix.ps1
+```
 
-1. افتح لوحة التحكم الخاصة بالمطورين: [Microsoft Partner Center](https://partner.microsoft.com/dashboard).
-2. اختر **Windows & Xbox** ثم اضغط على **Create a new app**.
-3. احجز اسم التطبيق: `Azkar Reminder`.
-4. ابدأ إرسال جديد (**Start your submission**)، وتوجه إلى قسم **Packages**.
-5. قم بسحب وإسقاط ملف:
-   ```
-   AzkarReminder-1.2.4.msix
-   ```
-6. سيقوم نظام مايكروسوفت بالتحقق من الحزمة وفحصها تلقائياً وتوقيعها بشهادة المتجر الرسمية.
-7. أكمل وصف التطبيق والصور واضغط **Submit to the Store**.
+السكربت يقرأ الإصدار من CMake، يعيد بناء Release، يرفض اختلاف إصدار executable، ويستدعي MakeAppx مع فحص رمز الخروج. النتيجة `release/AzkarReminder-<version>.msix` وبصمة SHA-256. يمكنك تحديد `-BuildDirectory` و`-OutputDirectory` لمسارات منفصلة. `scripts/build_msix.bat` يستدعي السكربت نفسه.
 
----
+الوضع الافتراضي لا ينشئ شهادة ولا يغيّر مخزن الثقة. الحزمة غير موقعة محليًا؛ هذا لا يثبت قبول المتجر أو نجاح تثبيتها. Microsoft Store يتولى توقيع حزم MSIX خلال الإرسال وفق [دليل Microsoft](https://learn.microsoft.com/en-us/windows/msix/package/sign-msix-package-guide).
 
-## 💻 طريقة التثبيت والتجربة المباشرة على ويندوز (Sideloading)
+## Local signing
 
-إذا أردت تثبيت الحزمة على جهازك مباشرة بدون رفعها للمتجر:
+للتوقيع المحلي استخدم شهادة code signing تملك مفتاحها الخاص، ويطابق Subject الخاص بها Publisher في manifest:
 
-1. اضغط مرتين على ملف الشهادة: `AzkarReminder-DeveloperCert.cer`.
-2. اضغط **Install Certificate...**
-3. اختر **Local Machine** واضغط **Next**.
-4. اختر **Place all certificates in the following store** ثم اضغط **Browse...** واختر:
-   - **`Trusted People`** (أو "الأشخاص الموثوق بهم").
-5. اضغط **Next** ثم **Finish**.
-6. الآن اضغط مرتين على ملف `AzkarReminder-1.2.4.msix` واضغط **Install**؛ سيتم تثبيت التطبيق ويعمل مباشرة!
+```powershell
+./installer/msix/build_msix.ps1 -SignForLocalTest -CertificateThumbprint '<thumbprint>'
+# Or sign an existing package:
+./installer/msix/sign_msix.ps1 -PackagePath './release/AzkarReminder-1.2.5.msix' -CertificateThumbprint '<thumbprint>'
+```
+
+التوقيع المستقل يحدث بصمة الحزمة بعد نجاحه. ملف `.cer` هو شهادة عامة ولا يحتوي المفتاح الخاص اللازم للتوقيع. سكربتا التغليف والتوقيع لا يثبتان شهادة ثقة ولا يثبتان الحزمة.
+
+اختبار CI المنفصل `scripts/smoke_windows_packages.ps1` وقّع نسخة مؤقتة، وثبّتها وفعّلها عبر AUMID، ثم تحقق من هوية العملية ومسار بياناتها وإزالتها. شهادة الثقة مؤقتة داخل runner مخصص؛ الحزمة المرفوعة تبقى غير موقعة. [سجل التحقق](../../docs/BUILD_VALIDATION.md) يحدد البيئة والحدود. ترقية MSIX من إصدار أقدم وقبول Partner Center لم يُختبرا. التشغيل عند تسجيل الدخول يحتاج اختبارًا منفصلًا؛ كتابة HKCU Run قد تخضع لعزل MSIX، ويحتاج دعم المتجر مراجعة `StartupTask`.

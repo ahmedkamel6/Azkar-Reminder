@@ -125,7 +125,7 @@ void LibraryPage::DrawFilterPills(ID2D1RenderTarget* rt, float x, float y, float
 }
 
 void LibraryPage::DrawContentItem(ID2D1RenderTarget* rt, float x, float& y, float w, size_t index, bool hovered) {
-    auto& items = ContentEngine::Instance().GetAllItems();
+    auto items = ContentEngine::Instance().GetAllItems();
     if (index >= items.size()) return;
     auto& item = items[index];
 
@@ -271,7 +271,7 @@ void LibraryPage::DrawAddModal(ID2D1RenderTarget* rt, const D2D1_RECT_F& bounds)
 }
 
 static std::vector<size_t> GetFilteredIndices(int filter) {
-    auto& allItems = ContentEngine::Instance().GetAllItems();
+    auto allItems = ContentEngine::Instance().GetAllItems();
     std::vector<size_t> filtered;
     filtered.reserve(allItems.size());
     for (size_t i = 0; i < allItems.size(); ++i) {
@@ -378,7 +378,7 @@ void LibraryPage::Draw(ID2D1RenderTarget* rt, const D2D1_RECT_F& bounds) {
     y += 38.f * m_dpiScale;
 
     // Filter items based on m_currentFilter
-    auto& allItems = ContentEngine::Instance().GetAllItems();
+    auto allItems = ContentEngine::Instance().GetAllItems();
     std::vector<size_t> filteredIndices = GetFilteredIndices(m_currentFilter);
 
     if (allItems.empty() || filteredIndices.empty()) {
@@ -629,7 +629,7 @@ bool LibraryPage::OnLButtonDown(int x, int y) {
         m_hoveredItem   = -1;
         m_hoveredDelBtn = false;
 
-        const auto& allItems = ContentEngine::Instance().GetAllItems();
+        const auto allItems = ContentEngine::Instance().GetAllItems();
         if (targetIndex >= 0 && targetIndex < (int)allItems.size()) {
             if (isDelBtn) {
                 std::string targetId = allItems[targetIndex].id;

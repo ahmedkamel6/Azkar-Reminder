@@ -1,0 +1,6 @@
+<RCC>
+  <qresource prefix="/azkar">
+    <file>fonts/cairo.ttf</file>
+    <file>images/logo.png</file>
+  </qresource>
+</RCC>

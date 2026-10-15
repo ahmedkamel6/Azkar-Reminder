@@ -95,7 +95,7 @@ void TrayIcon::UpdateIcon(ColorTheme themeOverride) {
 
     ColorTheme currentTheme = (themeOverride != static_cast<ColorTheme>(-1)) 
         ? themeOverride 
-        : Settings::Instance().Get().colorTheme;
+        : Settings::Instance().GetCopy().colorTheme;
 
     if (m_paused) {
         resId = IDI_APP_DORMANT_SMALL;

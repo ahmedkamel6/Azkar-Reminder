@@ -1,47 +1,23 @@
-<?xml version="1.0" encoding="utf-8"?>
-<Package
-  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
-  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
-  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
-  xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10"
-  IgnorableNamespaces="uap rescap desktop">
-
-  <Identity
-    Name="15145Ahmedkamel.AzkarReminder"
-    Publisher="CN=BD257909-6037-4C23-A6F3-A71B4BD2AF69"
-    Version="1.2.4.0"
-    ProcessorArchitecture="x64" />
-
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10" xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10" xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities" xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10" IgnorableNamespaces="uap rescap desktop">
+  <Identity Name="15145Ahmedkamel.AzkarReminder" Publisher="CN=BD257909-6037-4C23-A6F3-A71B4BD2AF69" Version="1.2.5.0" ProcessorArchitecture="x64" />
   <Properties>
     <DisplayName>Azkar Reminder</DisplayName>
     <PublisherDisplayName>Ahmedkamel</PublisherDisplayName>
     <Logo>Assets\StoreLogo.png</Logo>
     <Description>تطبيق سطح مكتب هادئ وعصري للتذكير بأذكار المسلم والاستغفار والتوحيد. خفيف وسريع وخصوصية تامة بدون إنترنت.</Description>
   </Properties>
-
   <Dependencies>
     <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.17763.0" MaxVersionTested="10.0.22621.0" />
   </Dependencies>
-
   <Resources>
     <Resource Language="ar" />
     <Resource Language="en" />
   </Resources>
-
   <Applications>
-    <Application Id="AzkarReminder"
-      Executable="AzkarReminder.exe"
-      EntryPoint="Windows.FullTrustApplication">
-      <uap:VisualElements
-        DisplayName="Azkar Reminder"
-        Description="Quiet and peaceful Islamic Dhikr reminder"
-        BackgroundColor="#0F172A"
-        Square150x150Logo="Assets\Square150x150Logo.png"
-        Square44x44Logo="Assets\Square44x44Logo.png">
-        <uap:DefaultTile
-          Wide310x150Logo="Assets\Wide310x150Logo.png"
-          Square71x71Logo="Assets\SmallTile.png"
-          Square310x310Logo="Assets\LargeTile.png">
+    <Application Id="AzkarReminder" Executable="AzkarReminder.exe" EntryPoint="Windows.FullTrustApplication">
+      <uap:VisualElements DisplayName="Azkar Reminder" Description="Quiet and peaceful Islamic Dhikr reminder" BackgroundColor="#0F172A" Square150x150Logo="Assets\Square150x150Logo.png" Square44x44Logo="Assets\Square44x44Logo.png">
+        <uap:DefaultTile Wide310x150Logo="Assets\Wide310x150Logo.png" Square71x71Logo="Assets\SmallTile.png" Square310x310Logo="Assets\LargeTile.png">
           <uap:ShowNameOnTiles>
             <uap:ShowOn Tile="square150x150Logo" />
             <uap:ShowOn Tile="wide310x150Logo" />
@@ -52,7 +28,6 @@
       </uap:VisualElements>
     </Application>
   </Applications>
-
   <Capabilities>
     <rescap:Capability Name="runFullTrust" />
   </Capabilities>

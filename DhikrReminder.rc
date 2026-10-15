@@ -43,8 +43,8 @@ IDR_QR_IBAN            RCDATA "assets/images/qr_iban.png"
 
 // Version information
 VS_VERSION_INFO VERSIONINFO
-FILEVERSION    1,2,4,0
-PRODUCTVERSION 1,2,4,0
+FILEVERSION    1,2,5,0
+PRODUCTVERSION 1,2,5,0
 FILEFLAGSMASK  0x3fL
 FILEFLAGS      0x0L
 FILEOS         VOS__WINDOWS32
@@ -57,12 +57,12 @@ BEGIN
         BEGIN
             VALUE "CompanyName",     "Ahmed Mohamed Kamel"
             VALUE "FileDescription", "Azkar Reminder"
-            VALUE "FileVersion",     "1.2.4.0"
+            VALUE "FileVersion",     "1.2.5.0"
             VALUE "InternalName",    "AzkarReminder"
             VALUE "LegalCopyright",  "Copyright © 2026 Ahmed Mohamed Kamel"
             VALUE "OriginalFilename","AzkarReminder.exe"
             VALUE "ProductName",     "Azkar Reminder"
-            VALUE "ProductVersion",  "1.2.4.0"
+            VALUE "ProductVersion",  "1.2.5.0"
         END
     END
     BLOCK "VarFileInfo"

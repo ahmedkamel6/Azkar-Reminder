@@ -14,6 +14,7 @@
 #include <QClipboard>
 #include <QToolTip>
 #include <QEasingCurve>
+#include <QStyle>
 
 namespace dhikr::qt {
 
@@ -40,7 +41,7 @@ PopupWindow::~PopupWindow() {
 
 void PopupWindow::SetupUi() {
     resize(kPopupWidth, kPopupHeight);
-    setMinimumSize(320, 140);
+    setMinimumSize(200, 140);
 
     auto* rootLayout = new QVBoxLayout(this);
     rootLayout->setContentsMargins(18, 14, 18, 14);
@@ -51,10 +52,12 @@ void PopupWindow::SetupUi() {
     headerLayout->setSpacing(8);
 
     m_lblCategory = new QLabel(this);
+    m_lblCategory->setTextFormat(Qt::PlainText);
     m_lblCategory->setObjectName("CategoryBadge");
     m_lblCategory->setFont(ThemeManager::Instance().UiFont(9, true));
 
     m_lblSource = new QLabel(this);
+    m_lblSource->setTextFormat(Qt::PlainText);
     m_lblSource->setFont(ThemeManager::Instance().UiFont(9, false));
     m_lblSource->setStyleSheet("color: #94A3B8;");
 
@@ -63,21 +66,27 @@ void PopupWindow::SetupUi() {
     headerLayout->addStretch();
 
     // Copy Button
-    m_btnCopy = new QPushButton(QString::fromUtf8("📋"), this);
+    m_btnCopy = new QPushButton(this);
+    m_btnCopy->setIcon(style()->standardIcon(QStyle::SP_DialogSaveButton));
+    m_btnCopy->setAccessibleName(QString::fromStdWString(Localization::Instance().Get(L"popup.copy")));
     m_btnCopy->setFixedSize(28, 28);
     m_btnCopy->setToolTip(QString::fromStdWString(Localization::Instance().Get(L"popup.copy", L"نسخ الأذكار")));
     connect(m_btnCopy, &QPushButton::clicked, this, &PopupWindow::OnCopyClicked);
     headerLayout->addWidget(m_btnCopy);
 
     // Pause Button
-    m_btnPause = new QPushButton(QString::fromUtf8("⏸"), this);
+    m_btnPause = new QPushButton(this);
+    m_btnPause->setIcon(style()->standardIcon(QStyle::SP_MediaPause));
+    m_btnPause->setAccessibleName(QString::fromStdWString(Localization::Instance().Get(L"popup.pause_15")));
     m_btnPause->setFixedSize(28, 28);
     m_btnPause->setToolTip(QString::fromStdWString(Localization::Instance().Get(L"popup.pause_15", L"إيقاف مؤقت (15 دقيقة)")));
     connect(m_btnPause, &QPushButton::clicked, this, &PopupWindow::OnPauseClicked);
     headerLayout->addWidget(m_btnPause);
 
     // Close Button
-    m_btnClose = new QPushButton(QString::fromUtf8("✕"), this);
+    m_btnClose = new QPushButton(this);
+    m_btnClose->setIcon(style()->standardIcon(QStyle::SP_DialogCloseButton));
+    m_btnClose->setAccessibleName(QString::fromStdWString(Localization::Instance().Get(L"popup.close")));
     m_btnClose->setFixedSize(28, 28);
     m_btnClose->setToolTip(QString::fromStdWString(Localization::Instance().Get(L"popup.close", L"إغلاق")));
     connect(m_btnClose, &QPushButton::clicked, this, &PopupWindow::Dismiss);
@@ -92,7 +101,14 @@ void PopupWindow::SetupUi() {
     m_lblArabic->setAlignment(Qt::AlignCenter);
     m_lblArabic->setWordWrap(true);
     m_lblArabic->setLayoutDirection(Qt::RightToLeft);
-    rootLayout->addWidget(m_lblArabic, 1);
+    m_lblArabic->setTextFormat(Qt::PlainText);
+    m_lblArabic->setTextInteractionFlags(Qt::TextSelectableByMouse | Qt::TextSelectableByKeyboard);
+    m_bodyScroll = new QScrollArea(this);
+    m_bodyScroll->setFrameShape(QFrame::NoFrame);
+    m_bodyScroll->setWidgetResizable(true);
+    m_bodyScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_bodyScroll->setWidget(m_lblArabic);
+    rootLayout->addWidget(m_bodyScroll, 1);
 
     // ── Transliteration / Meaning ──
     m_lblTransliteration = new QLabel(this);
@@ -100,6 +116,7 @@ void PopupWindow::SetupUi() {
     m_lblTransliteration->setFont(ThemeManager::Instance().UiFont(10, false));
     m_lblTransliteration->setAlignment(Qt::AlignCenter);
     m_lblTransliteration->setWordWrap(true);
+    m_lblTransliteration->setTextFormat(Qt::PlainText);
     rootLayout->addWidget(m_lblTransliteration);
 
     // ── Bottom: Slim Auto-Dismiss Progress Bar Only ──
@@ -138,7 +155,8 @@ void PopupWindow::OnThemeChanged() {
     update();
 }
 
-void PopupWindow::ShowReminder(const ContentItem& item) {
+void PopupWindow::ShowReminder(const ContentItem& item, bool recordDelivery) {
+    if (isVisible()) return;
     m_dismissTimer->stop();
     StopActiveAnimations();
 
@@ -146,11 +164,21 @@ void PopupWindow::ShowReminder(const ContentItem& item) {
     m_currentItem = item;
     m_isPausedByHover = false;
 
-    const auto& s = Settings::Instance().Get();
+    const auto s = Settings::Instance().GetCopy();
 
     m_lblCategory->setText(QString::fromStdString(item.category));
     m_lblSource->setText(s.showSource ? QString::fromStdWString(item.source) : QString());
-    m_lblArabic->setText(QString::fromStdWString(item.text));
+    auto text = QString::fromStdWString(item.text);
+    if (!s.showTashkeel) {
+        QString plain;
+        for (auto character : text) {
+            auto value = character.unicode();
+            if (!(value >= 0x064B && value <= 0x065F) && value != 0x0670) plain += character;
+        }
+        text = plain;
+    }
+    m_lblArabic->setText(text);
+    m_lblArabic->setFont(ThemeManager::Instance().ArabicFont(s.popupFontSize == PopupFontSize::Large ? 22 : s.popupFontSize == PopupFontSize::Small ? 14 : 17, true));
 
     if (s.showSource && !item.transliteration.empty()) {
         m_lblTransliteration->setText(QString::fromStdWString(item.transliteration));
@@ -167,6 +195,8 @@ void PopupWindow::ShowReminder(const ContentItem& item) {
     m_totalDurationSec = s.popupDurationSec;
     if (m_totalDurationSec <= 0) m_totalDurationSec = 5;
     m_elapsedSec = 0;
+    m_elapsedTimer.start();
+    m_hoverDuration = 0;
     m_progress->setRange(0, m_totalDurationSec * 10);
     m_progress->setValue(m_totalDurationSec * 10);
 
@@ -179,15 +209,15 @@ void PopupWindow::ShowReminder(const ContentItem& item) {
     m_dismissTimer->start(100);
 
     // Record delivery in database
-    Database::Instance().InsertReminderEvent(item.id, item.category, "delivered");
+    if (recordDelivery) Database::Instance().InsertReminderEvent(item.id, item.category, "delivered");
 }
 
 void PopupWindow::PositionWindow() {
-    const auto& s = Settings::Instance().Get();
-    QScreen* screen = nullptr;
-    if (s.popupMonitor == PopupMonitor::Active) {
+    const auto s = Settings::Instance().GetCopy();
+    QScreen* screen = m_screen;
+    if (!screen && s.popupMonitor == PopupMonitor::Active) {
         screen = QGuiApplication::screenAt(QCursor::pos());
-    } else if (s.popupMonitor == PopupMonitor::Specific) {
+    } else if (!screen && s.popupMonitor == PopupMonitor::Specific) {
         auto screens = QGuiApplication::screens();
         if (s.specificMonitor >= 0 && s.specificMonitor < screens.size()) {
             screen = screens[s.specificMonitor];
@@ -197,8 +227,10 @@ void PopupWindow::PositionWindow() {
         screen = QGuiApplication::primaryScreen();
     }
 
-    int w = kPopupWidth;
-    int h = kPopupHeight;
+    int w = screen ? std::max(200, std::min(kPopupWidth, screen->availableGeometry().width() - 40)) : kPopupWidth;
+    m_lblArabic->setMinimumHeight(m_lblArabic->fontMetrics().boundingRect(QRect(0, 0, w - 54, 100000), Qt::TextWordWrap, m_lblArabic->text()).height() + 8);
+    int h = std::max(kPopupHeight, m_lblArabic->minimumHeight() + 96);
+    if (screen) h = std::min(h, std::max(140, screen->availableGeometry().height() / 2));
 
     if (screen) {
         QRect avail = screen->availableGeometry();
@@ -228,7 +260,7 @@ void PopupWindow::PositionWindow() {
 }
 
 int PopupWindow::GetAnimationDurationMs() const {
-    switch (Settings::Instance().Get().animationSpeed) {
+    switch (Settings::Instance().GetCopy().animationSpeed) {
         case AnimationSpeed::Snappy:    return 250;
         case AnimationSpeed::Cinematic: return 550;
         case AnimationSpeed::Normal:
@@ -237,7 +269,7 @@ int PopupWindow::GetAnimationDurationMs() const {
 }
 
 void PopupWindow::StartEntranceAnimation() {
-    const auto& s = Settings::Instance().Get();
+    const auto s = Settings::Instance().GetCopy();
     if (!s.animationEnabled) {
         setGeometry(m_targetGeometry);
         setWindowOpacity(1.0);
@@ -335,7 +367,7 @@ void PopupWindow::Dismiss() {
 void PopupWindow::StartExitAnimation() {
     StopActiveAnimations();
 
-    if (!Settings::Instance().Get().animationEnabled) {
+    if (!Settings::Instance().GetCopy().animationEnabled) {
         hide();
         setWindowOpacity(1.0);
         return;
@@ -359,7 +391,7 @@ void PopupWindow::StartExitAnimation() {
 void PopupWindow::OnTimerTick() {
     if (m_isPausedByHover) return;
 
-    m_elapsedSec++;
+    m_elapsedSec = static_cast<int>((m_elapsedTimer.elapsed() - m_hoverDuration) / 100);
     int remaining = (m_totalDurationSec * 10) - m_elapsedSec;
     if (remaining <= 0) {
         Dismiss();
@@ -384,11 +416,13 @@ void PopupWindow::OnPauseClicked() {
 void PopupWindow::enterEvent(QEnterEvent* event) {
     QWidget::enterEvent(event);
     m_isPausedByHover = true;
+    m_hoverStarted = m_elapsedTimer.isValid() ? m_elapsedTimer.elapsed() : 0;
 }
 
 void PopupWindow::leaveEvent(QEvent* event) {
     QWidget::leaveEvent(event);
     m_isPausedByHover = false;
+    if (m_elapsedTimer.isValid()) m_hoverDuration += m_elapsedTimer.elapsed() - m_hoverStarted;
 }
 
 void PopupWindow::paintEvent(QPaintEvent* /*event*/) {

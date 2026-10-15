@@ -1,4 +1,6 @@
 #include "Settings.h"
+#include "Utf8.h"
+#include "AtomicFile.h"
 #include "Logger.h"
 #include "../third_party/json.hpp"
 #include <fstream>
@@ -6,6 +8,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <random>
+#include <ctime>
 #ifdef _WIN32
 #include <windows.h>
 #include <objbase.h>
@@ -14,62 +17,6 @@
 using json = nlohmann::json;
 
 namespace dhikr {
-
-// Helper: UTF-8 <-> UTF-16
-static std::string WideToUtf8(const std::wstring& wstr) {
-    if (wstr.empty()) return "";
-#ifdef _WIN32
-    int size = WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), -1, nullptr, 0, nullptr, nullptr);
-    std::string result(size - 1, 0);
-    WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), -1, result.data(), size, nullptr, nullptr);
-    return result;
-#else
-    std::string result;
-    for (wchar_t wc : wstr) {
-        if (wc < 0x80) {
-            result.push_back((char)wc);
-        } else if (wc < 0x800) {
-            result.push_back((char)(0xC0 | (wc >> 6)));
-            result.push_back((char)(0x80 | (wc & 0x3F)));
-        } else {
-            result.push_back((char)(0xE0 | (wc >> 12)));
-            result.push_back((char)(0x80 | ((wc >> 6) & 0x3F)));
-            result.push_back((char)(0x80 | (wc & 0x3F)));
-        }
-    }
-    return result;
-#endif
-}
-
-static std::wstring Utf8ToWide(const std::string& str) {
-    if (str.empty()) return L"";
-#ifdef _WIN32
-    int size = MultiByteToWideChar(CP_UTF8, 0, str.c_str(), -1, nullptr, 0);
-    std::wstring result(size - 1, 0);
-    MultiByteToWideChar(CP_UTF8, 0, str.c_str(), -1, result.data(), size);
-    return result;
-#else
-    std::wstring result;
-    for (size_t i = 0; i < str.size();) {
-        unsigned char c = (unsigned char)str[i];
-        if (c < 0x80) {
-            result.push_back((wchar_t)c);
-            i += 1;
-        } else if ((c & 0xE0) == 0xC0 && i + 1 < str.size()) {
-            wchar_t wc = ((c & 0x1F) << 6) | (str[i + 1] & 0x3F);
-            result.push_back(wc);
-            i += 2;
-        } else if ((c & 0xF0) == 0xE0 && i + 2 < str.size()) {
-            wchar_t wc = ((c & 0x0F) << 12) | ((str[i + 1] & 0x3F) << 6) | (str[i + 2] & 0x3F);
-            result.push_back(wc);
-            i += 3;
-        } else {
-            i += 1; // skip malformed
-        }
-    }
-    return result;
-#endif
-}
 
 Settings& Settings::Instance() {
     static Settings instance;
@@ -133,6 +80,11 @@ bool Settings::Load(const std::filesystem::path& appDataPath) {
 
     std::ifstream f(m_filePath);
     if (!f.is_open()) {
+        std::error_code error;
+        if (std::filesystem::exists(m_filePath, error) || error) {
+            LOG_ERROR("Settings file exists but cannot be read");
+            return false;
+        }
         LOG_INFO("Settings file not found — using defaults");
         return true; // First launch, defaults are fine
     }
@@ -140,7 +92,8 @@ bool Settings::Load(const std::filesystem::path& appDataPath) {
     try {
         json j;
         f >> j;
-        auto& s = m_settings;
+        if (!j.is_object()) throw std::runtime_error("Settings must be a JSON object");
+        auto s = m_settings;
 
         // General
         if (j.contains("language"))        s.language = Utf8ToWide(j["language"].get<std::string>());
@@ -156,10 +109,12 @@ bool Settings::Load(const std::filesystem::path& appDataPath) {
         if (j.contains("remindersEnabled")) s.remindersEnabled = j["remindersEnabled"].get<bool>();
 
         // Weekly schedule (7 days)
-        if (j.contains("weeklySchedule") && j["weeklySchedule"].is_array()) {
+        if (j.contains("weeklySchedule")) {
+            if (!j["weeklySchedule"].is_array()) throw std::runtime_error("weeklySchedule must be an array");
             auto& arr = j["weeklySchedule"];
             for (size_t i = 0; i < std::min((size_t)7, arr.size()); ++i) {
                 auto& d = arr[i];
+                if (!d.is_object()) throw std::runtime_error("Day schedule must be an object");
                 auto& ds = s.weeklySchedule[i];
                 if (d.contains("enabled"))          ds.enabled = d["enabled"].get<bool>();
                 if (d.contains("startHour"))        ds.startHour = d["startHour"].get<int>();
@@ -171,9 +126,11 @@ bool Settings::Load(const std::filesystem::path& appDataPath) {
         }
 
         // Quiet periods
-        if (j.contains("quietPeriods") && j["quietPeriods"].is_array()) {
+        if (j.contains("quietPeriods")) {
+            if (!j["quietPeriods"].is_array()) throw std::runtime_error("quietPeriods must be an array");
             s.quietPeriods.clear();
             for (auto& qp : j["quietPeriods"]) {
+                if (!qp.is_object()) throw std::runtime_error("Quiet period must be an object");
                 QuietPeriod q;
                 if (qp.contains("startHour")) q.startHour = qp["startHour"].get<int>();
                 if (qp.contains("startMin"))  q.startMin  = qp["startMin"].get<int>();
@@ -215,8 +172,10 @@ bool Settings::Load(const std::filesystem::path& appDataPath) {
         // Internal
         if (j.contains("firstLaunch"))   s.firstLaunch = j["firstLaunch"].get<bool>();
         if (j.contains("paused"))        s.paused = j["paused"].get<bool>();
-        if (j.contains("pauseUntilUnix")) s.pauseUntilUnix = j["pauseUntilUnix"].get<int>();
+        if (j.contains("pauseUntilUnix")) s.pauseUntilUnix = j["pauseUntilUnix"].get<int64_t>();
 
+        Validate(s);
+        m_settings = std::move(s);
         LOG_INFO("Settings loaded successfully");
         return true;
 
@@ -306,31 +265,9 @@ bool Settings::Save() {
         j["paused"]         = s.paused;
         j["pauseUntilUnix"] = s.pauseUntilUnix;
 
-        // Atomic write: write to temp file then rename
-        auto tmpPath = m_filePath;
-        tmpPath += ".tmp";
-        {
-            std::ofstream f(tmpPath);
-            if (!f.is_open()) {
-                LOG_ERROR("Cannot open settings temp file for writing");
-                return false;
-            }
-            std::string jsonStr = j.dump(2);
-            f << jsonStr;
-            f.flush();
-            if (f.fail()) {
-                LOG_ERROR("Failed to write settings to temp file");
-                std::error_code ec;
-                std::filesystem::remove(tmpPath, ec);
-                return false;
-            }
-        }
-        // Atomic replace
-        std::error_code ec;
-        std::filesystem::rename(tmpPath, m_filePath, ec);
-        if (ec) {
-            std::filesystem::copy_file(tmpPath, m_filePath, std::filesystem::copy_options::overwrite_existing, ec);
-            std::filesystem::remove(tmpPath, ec);
+        if (!WriteFileAtomically(m_filePath, j.dump(2))) {
+            LOG_ERROR("Failed to replace settings file; previous file retained");
+            return false;
         }
 
         LOG_INFO("Settings saved");
@@ -342,8 +279,24 @@ bool Settings::Save() {
     }
 }
 
+bool Settings::BackupInvalidFile() {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    for (int attempt = 0; attempt < 100; ++attempt) {
+        const auto name = "settings-invalid-" + std::to_string(time(nullptr)) + "-" + std::to_string(attempt) + ".json";
+        std::error_code error;
+        if (std::filesystem::copy_file(m_filePath, m_filePath.parent_path() / name, error)) return true;
+        if (error != std::errc::file_exists) return false;
+    }
+    return false;
+}
+
 void Settings::NotifyChanged() {
-    for (auto& cb : m_changeCallbacks) {
+    std::vector<ChangeCallback> callbacks;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        callbacks = m_changeCallbacks;
+    }
+    for (auto& cb : callbacks) {
         if (cb) cb();
     }
 }
@@ -357,8 +310,63 @@ void Settings::Update(const AppSettings& newSettings) {
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         m_settings = newSettings;
+        Validate(m_settings);
     }
     NotifyChanged();
+}
+
+void Settings::UpdatePreferences(const AppSettings& newSettings) {
+    Modify([&](AppSettings& current) {
+        auto replacement = newSettings;
+        replacement.paused = current.paused;
+        replacement.pauseUntilUnix = current.pauseUntilUnix;
+        replacement.firstLaunch = current.firstLaunch;
+        replacement.installationId = current.installationId;
+        replacement.lastUpdateCheck = current.lastUpdateCheck;
+        replacement.pendingUpdateVersion = current.pendingUpdateVersion;
+        replacement.pendingUpdateUrl = current.pendingUpdateUrl;
+        current = std::move(replacement);
+    });
+}
+
+void Settings::Modify(const std::function<void(AppSettings&)>& change) {
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        change(m_settings);
+        Validate(m_settings);
+    }
+    NotifyChanged();
+}
+
+void Settings::Validate(AppSettings& settings) {
+    for (auto& day : settings.weeklySchedule) {
+        day.startHour = std::clamp(day.startHour, 0, 23);
+        day.endHour = std::clamp(day.endHour, 0, 23);
+        day.startMin = std::clamp(day.startMin, 0, 59);
+        day.endMin = std::clamp(day.endMin, 0, 59);
+        day.frequencyMinutes = std::clamp(day.frequencyMinutes, 1, 1440);
+    }
+    for (auto& quiet : settings.quietPeriods) {
+        quiet.startHour = std::clamp(quiet.startHour, 0, 23);
+        quiet.endHour = std::clamp(quiet.endHour, 0, 23);
+        quiet.startMin = std::clamp(quiet.startMin, 0, 59);
+        quiet.endMin = std::clamp(quiet.endMin, 0, 59);
+    }
+    settings.popupDurationSec = std::clamp(settings.popupDurationSec, 2, 60);
+    settings.specificMonitor = std::max(0, settings.specificMonitor);
+    settings.popupPosition = static_cast<PopupPosition>(std::clamp(static_cast<int>(settings.popupPosition), 0, 8));
+    settings.popupMonitor = static_cast<PopupMonitor>(std::clamp(static_cast<int>(settings.popupMonitor), 0, 3));
+    settings.popupFontSize = static_cast<PopupFontSize>(std::clamp(static_cast<int>(settings.popupFontSize), 0, 2));
+    settings.popupAnimation = static_cast<PopupAnimation>(std::clamp(static_cast<int>(settings.popupAnimation), 0, 7));
+    settings.animationSpeed = static_cast<AnimationSpeed>(std::clamp(static_cast<int>(settings.animationSpeed), 0, 2));
+    settings.popupSurface = static_cast<PopupSurfaceStyle>(std::clamp(static_cast<int>(settings.popupSurface), 0, 2));
+    settings.popupCorner = static_cast<PopupCornerStyle>(std::clamp(static_cast<int>(settings.popupCorner), 0, 2));
+    settings.colorTheme = static_cast<ColorTheme>(std::clamp(static_cast<int>(settings.colorTheme), 0, 5));
+    settings.soundPreset = static_cast<SoundPreset>(std::clamp(static_cast<int>(settings.soundPreset), 0, 4));
+    settings.fullscreenSuppressionMode = std::clamp(settings.fullscreenSuppressionMode, 0, 2);
+    settings.soundVolume = std::clamp(settings.soundVolume, 0, 100);
+    settings.pauseUntilUnix = std::max<int64_t>(0, settings.pauseUntilUnix);
+    if (settings.language != L"ar" && settings.language != L"en" && settings.language != L"system") settings.language = L"en";
 }
 
 } // namespace dhikr

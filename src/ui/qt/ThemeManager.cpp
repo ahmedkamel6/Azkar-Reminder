@@ -3,6 +3,7 @@
 #include <QFontInfo>
 #include <QApplication>
 #include <ctime>
+#include "../../core/Localization.h"
 
 namespace dhikr::qt {
 
@@ -15,14 +16,14 @@ ThemeManager::ThemeManager() {
 }
 
 bool ThemeManager::IsAppPaused() const {
-    const auto& s = Settings::Instance().Get();
+    const auto s = Settings::Instance().GetCopy();
     if (!s.remindersEnabled || s.paused) return true;
     if (s.pauseUntilUnix > 0 && time(nullptr) < s.pauseUntilUnix) return true;
     return false;
 }
 
 ColorTheme ThemeManager::CurrentTheme() const {
-    return Settings::Instance().Get().colorTheme;
+    return Settings::Instance().GetCopy().colorTheme;
 }
 
 QColor ThemeManager::GetThemePrimary(ColorTheme theme, qreal alpha) const {
@@ -82,13 +83,8 @@ QFont ThemeManager::ArabicFont(int pointSize, bool bold) const {
 }
 
 QFont ThemeManager::UiFont(int pointSize, bool bold) const {
-    QFont font("Segoe UI", pointSize);
-    if (!QFontInfo(font).exactMatch()) {
-        font.setFamily("Ubuntu");
-        if (!QFontInfo(font).exactMatch()) {
-            font.setFamily("SF Pro Display");
-        }
-    }
+    QFont font = Localization::Instance().IsRTL() ? ArabicFont(pointSize, bold) : QApplication::font();
+    font.setPointSize(pointSize);
     font.setBold(bold);
     return font;
 }
@@ -111,14 +107,22 @@ QString ThemeManager::GenerateApplicationStyleSheet() const {
         QMainWindow, QDialog {
             background-color: #080A09;
         }
-        QFrame#Sidebar {
+        QLabel#Countdown { font-size: 28px; font-weight: bold; }
+        QLabel#StatValue { font-size: 22px; font-weight: bold; }
+        QLabel, QCheckBox, QGroupBox { background-color: transparent; }
+        QListWidget#Sidebar {
             background-color: #101310;
             border-right: 1px solid #1E2520;
+            outline: none;
+            border: none;
         }
+        QListWidget#Sidebar::item { padding: 10px; border-left: 3px solid transparent; }
+        QListWidget#Sidebar::item:selected { color: %1; background: #1B221C; border-left: 3px solid %1; }
+        QListWidget#Sidebar::item:focus { border: 1px solid %1; }
         QFrame#Card {
             background-color: #151915;
             border: 1px solid #283029;
-            border-radius: 12px;
+            border-radius: 6px;
         }
         QFrame#Card:hover {
             border: 1px solid %1;
@@ -219,13 +223,15 @@ QString ThemeManager::GeneratePopupStyleSheet() const {
         }
         QLabel#DhikrArabic {
             color: #FDFEFD;
-            font-size: 20px;
             font-weight: bold;
         }
         QLabel#DhikrTranslation {
             color: #CBD5E1;
             font-size: 13px;
         }
+        QScrollArea, QScrollArea > QWidget > QWidget { background: transparent; border: none; }
+        QLabel { background: transparent; }
+        QPushButton { padding: 2px; }
         QLabel#CategoryBadge {
             background-color: rgba(183, 243, 74, 25);
             color: %1;

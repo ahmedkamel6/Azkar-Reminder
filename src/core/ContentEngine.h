@@ -60,6 +60,8 @@ public:
     // Reload from the same path used in Load()
     ContentLoadResult Reload();
 
+    // Returned item pointers are per-thread snapshots, valid until the same accessor
+    // is called again on that thread. Copy before keeping an item across UI events.
     // Get next content item using weighted-random history-aware selection
     const ContentItem* GetNext();
 
@@ -70,9 +72,8 @@ public:
     std::vector<std::string> GetCategories() const;
 
     // All items (for the library page)
-    const std::vector<ContentItem>& GetAllItems() const { return m_items; }
-    const std::vector<ContentItem>& GetItems() const { return m_items; }
-    std::vector<ContentItem>& GetItemsMutable() { return m_items; }
+    std::vector<ContentItem> GetAllItems() const;
+    std::vector<ContentItem> GetItems() const { return GetAllItems(); }
 
     // Add a new custom item and persist to disk
     void AddItem(const ContentItem& item);
@@ -91,16 +92,17 @@ public:
     const ContentItem* GetNextPreview() const;
 
     // Item count
-    size_t Count() const { return m_items.size(); }
-    bool   IsEmpty() const { return m_items.empty(); }
+    size_t Count() const;
+    bool   IsEmpty() const { return Count() == 0; }
 
-    void Save();
+    bool Save();
+    bool Export(const std::filesystem::path& path);
 
     // Set the canonical AppData save path (called once at startup)
-    void SetSavePath(const std::filesystem::path& path) { m_savePath = path; }
+    void SetSavePath(const std::filesystem::path& path);
 
     // Last load error description
-    std::wstring LastError() const { return m_lastError; }
+    std::wstring LastError() const;
 
     ContentEngine(const ContentEngine&) = delete;
     ContentEngine& operator=(const ContentEngine&) = delete;
@@ -111,6 +113,8 @@ private:
     ContentLoadResult ParseAndValidate(const std::filesystem::path& filePath,
                                        std::vector<ContentItem>& out,
                                        std::wstring& errorOut);
+
+    bool SaveToLocked(const std::filesystem::path& path);
 
     double ComputeWeight(const ContentItem& item, size_t recentlyShownIndex) const;
 

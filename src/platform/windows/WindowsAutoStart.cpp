@@ -36,13 +36,12 @@ bool WindowsAutoStart::IsAutoStartEnabled() const {
 
 bool WindowsAutoStart::SetAutoStartEnabled(bool enable, const std::filesystem::path& appPath) {
     HKEY hKey = nullptr;
-    LSTATUS status = RegOpenKeyExW(
-        HKEY_CURRENT_USER,
-        L"Software\\Microsoft\\Windows\\CurrentVersion\\Run",
-        0,
-        KEY_SET_VALUE,
-        &hKey
-    );
+    const wchar_t* runKey = L"Software\\Microsoft\\Windows\\CurrentVersion\\Run";
+    LSTATUS status = enable
+        ? RegCreateKeyExW(HKEY_CURRENT_USER, runKey, 0, nullptr, REG_OPTION_NON_VOLATILE,
+                          KEY_SET_VALUE, nullptr, &hKey, nullptr)
+        : RegOpenKeyExW(HKEY_CURRENT_USER, runKey, 0, KEY_SET_VALUE, &hKey);
+    if (!enable && status == ERROR_FILE_NOT_FOUND) return true;
     if (status != ERROR_SUCCESS) {
         LOG_ERROR("Failed to open HKCU Run registry key, status=" + std::to_string(status));
         return false;

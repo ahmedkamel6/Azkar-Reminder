@@ -14,6 +14,7 @@
 
 int g_passedTests = 0;
 int g_failedTests = 0;
+void RunRegressionTests();
 
 void RunTest(const std::string& name, const std::function<bool()>& testFunc) {
     std::cout << "[ RUN  ] " << name << " ... ";
@@ -86,21 +87,24 @@ bool TestSettings() {
     if (!sMgr.Load(tmpDir)) return false;
 
     // Mutate
-    auto& s = sMgr.Get();
+    auto s = sMgr.GetCopy();
     s.colorTheme = dhikr::ColorTheme::Gold;
     s.popupDurationSec = 17;
     s.popupAnimation = dhikr::PopupAnimation::RippleGenesis;
     s.animationSpeed = dhikr::AnimationSpeed::Snappy;
+    sMgr.Update(s);
     if (!sMgr.Save()) return false;
 
     // Reload in fresh object state
     s.colorTheme = dhikr::ColorTheme::Green; // overwrite in memory
+    sMgr.Update(s);
     if (!sMgr.Load(tmpDir)) return false;
 
-    if (sMgr.Get().colorTheme != dhikr::ColorTheme::Gold) return false;
-    if (sMgr.Get().popupDurationSec != 17) return false;
-    if (sMgr.Get().popupAnimation != dhikr::PopupAnimation::RippleGenesis) return false;
-    if (sMgr.Get().animationSpeed != dhikr::AnimationSpeed::Snappy) return false;
+    const auto loaded = sMgr.GetCopy();
+    if (loaded.colorTheme != dhikr::ColorTheme::Gold) return false;
+    if (loaded.popupDurationSec != 17) return false;
+    if (loaded.popupAnimation != dhikr::PopupAnimation::RippleGenesis) return false;
+    if (loaded.animationSpeed != dhikr::AnimationSpeed::Snappy) return false;
 
     std::error_code ec;
     std::filesystem::remove_all(tmpDir, ec);
@@ -135,8 +139,9 @@ bool TestScheduler() {
     auto& sched = dhikr::Scheduler::Instance();
 
     // Enable reminders in settings
-    dhikr::Settings::Instance().Get().remindersEnabled = true;
-    dhikr::Settings::Instance().Get().paused = false;
+    dhikr::Settings::Instance().Modify([](dhikr::AppSettings& settings) {
+        settings.remindersEnabled = true; settings.paused = false; settings.pauseUntilUnix = 0;
+    });
 
     bool triggered = false;
     sched.Start([&]() {
@@ -146,14 +151,17 @@ bool TestScheduler() {
     sched.Resume();
     if (sched.IsPaused()) { sched.Stop(); return false; }
 
-    // Pause for 15 minutes
-    sched.Pause(15);
-    if (!sched.IsPaused()) { sched.Stop(); return false; }
-    if (sched.GetState() != dhikr::ScheduleState::Paused) { sched.Stop(); return false; }
-
-    // Resume
-    sched.Resume();
-    if (sched.IsPaused()) { sched.Stop(); return false; }
+    // Let the worker race with repeated UI pause/resume requests. A stale
+    // settings snapshot must never publish Active after Pause has returned.
+    for (int attempt = 0; attempt < 100; ++attempt) {
+        sched.Pause(15);
+        std::this_thread::yield();
+        if (!sched.IsPaused()) { sched.Stop(); return false; }
+        if (sched.GetState() != dhikr::ScheduleState::Paused) { sched.Stop(); return false; }
+        sched.Resume();
+        if (sched.IsPaused()) { sched.Stop(); return false; }
+        if (sched.GetState() == dhikr::ScheduleState::Paused) { sched.Stop(); return false; }
+    }
 
     // TriggerNow must invoke the callback
     sched.TriggerNow();
@@ -261,6 +269,7 @@ int main() {
     RunTest("Platform Adapters (AutoStart & FullScreen)", TestPlatformAdapters);
     RunTest("ContentEngine Custom Items & Safety", TestContentEngineCustomItems);
     RunTest("Embedded Content Resource Fallback",  TestEmbeddedContentResource);
+    RunRegressionTests();
 
     std::cout << "========================================" << std::endl;
     std::cout << "Tests Passed: " << g_passedTests << " / " << (g_passedTests + g_failedTests) << std::endl;

@@ -1,5 +1,7 @@
 #include "ContentEngine.h"
-#include "EmbeddedContent.h"
+#include "Utf8.h"
+#include "AtomicFile.h"
+#include <azkar/EmbeddedContent.h>
 #include "Logger.h"
 #include "Database.h"
 #ifdef _WIN32
@@ -31,76 +33,6 @@ static inline void SafeLocalTime(struct tm* tm, const time_t* time) {
 #endif
 }
 
-static std::wstring Utf8ToWide(const std::string& str) {
-    if (str.empty()) return L"";
-#ifdef _WIN32
-    // Strict UTF-8 conversion without null-terminator overrun
-    int size = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, str.data(), (int)str.size(), nullptr, 0);
-    if (size > 0) {
-        std::wstring result(size, 0);
-        MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, str.data(), (int)str.size(), result.data(), size);
-        return result;
-    }
-    
-    // Fallback to system ANSI code page
-    size = MultiByteToWideChar(CP_ACP, 0, str.data(), (int)str.size(), nullptr, 0);
-    if (size > 0) {
-        std::wstring result(size, 0);
-        MultiByteToWideChar(CP_ACP, 0, str.data(), (int)str.size(), result.data(), size);
-        return result;
-    }
-    return L"";
-#else
-    std::wstring result;
-    for (size_t i = 0; i < str.size();) {
-        unsigned char c = (unsigned char)str[i];
-        if (c < 0x80) {
-            result.push_back((wchar_t)c);
-            i += 1;
-        } else if ((c & 0xE0) == 0xC0 && i + 1 < str.size()) {
-            wchar_t wc = ((c & 0x1F) << 6) | (str[i + 1] & 0x3F);
-            result.push_back(wc);
-            i += 2;
-        } else if ((c & 0xF0) == 0xE0 && i + 2 < str.size()) {
-            wchar_t wc = ((c & 0x0F) << 12) | ((str[i + 1] & 0x3F) << 6) | (str[i + 2] & 0x3F);
-            result.push_back(wc);
-            i += 3;
-        } else {
-            i += 1;
-        }
-    }
-    return result;
-#endif
-}
-
-static std::string WideToUtf8(const std::wstring& wstr) {
-    if (wstr.empty()) return "";
-#ifdef _WIN32
-    int size = WideCharToMultiByte(CP_UTF8, 0, wstr.data(), (int)wstr.size(), nullptr, 0, nullptr, nullptr);
-    if (size > 0) {
-        std::string result(size, 0);
-        WideCharToMultiByte(CP_UTF8, 0, wstr.data(), (int)wstr.size(), result.data(), size, nullptr, nullptr);
-        return result;
-    }
-    return "";
-#else
-    std::string result;
-    for (wchar_t wc : wstr) {
-        if (wc < 0x80) {
-            result.push_back((char)wc);
-        } else if (wc < 0x800) {
-            result.push_back((char)(0xC0 | (wc >> 6)));
-            result.push_back((char)(0x80 | (wc & 0x3F)));
-        } else {
-            result.push_back((char)(0xE0 | (wc >> 12)));
-            result.push_back((char)(0x80 | ((wc >> 6) & 0x3F)));
-            result.push_back((char)(0x80 | (wc & 0x3F)));
-        }
-    }
-    return result;
-#endif
-}
-
 // ── Load from file ────────────────────────────────────────────────────────────
 ContentLoadResult ContentEngine::Load(const std::filesystem::path& contentFilePath) {
     bool isMarkdown = (contentFilePath.extension() == ".md" || contentFilePath.extension() == ".MD");
@@ -112,11 +44,12 @@ ContentLoadResult ContentEngine::Load(const std::filesystem::path& contentFilePa
             char bom[3] = {};
             peekF.read(bom, 3);
             if (!(bom[0] == '\xEF' && bom[1] == '\xBB' && bom[2] == '\xBF')) {
+                peekF.clear();
                 peekF.seekg(0);
             }
             char firstChar = 0;
             while (peekF.get(firstChar)) {
-                if (!isspace(firstChar)) break;
+                if (!isspace(static_cast<unsigned char>(firstChar))) break;
             }
             if (firstChar == '[' || firstChar == '{') {
                 isMarkdown = false;
@@ -129,14 +62,15 @@ ContentLoadResult ContentEngine::Load(const std::filesystem::path& contentFilePa
     }
 
     std::lock_guard<std::mutex> lock(m_mutex);
-    m_lastFilePath = contentFilePath;
 
     std::vector<ContentItem> parsed;
     std::wstring error;
     ContentLoadResult result = ParseAndValidate(contentFilePath, parsed, error);
 
     if (result == ContentLoadResult::Success) {
+        m_lastFilePath = contentFilePath;
         m_items = std::move(parsed);
+        m_current = nullptr;
         m_lastError.clear();
 
         // Seed recent IDs from database history
@@ -158,15 +92,6 @@ ContentLoadResult ContentEngine::LoadFromResource() {
 #ifdef _WIN32
     auto res = LoadFromMarkdownResource(nullptr, IDR_CONTENT_MD);
     if (res == ContentLoadResult::Success) return res;
-#else
-    if (std::filesystem::exists("assets/content.md")) {
-        auto res = LoadFromMarkdownFile(std::filesystem::path("assets/content.md"));
-        if (res == ContentLoadResult::Success) return res;
-    }
-    if (std::filesystem::exists("content.md")) {
-        auto res = LoadFromMarkdownFile(std::filesystem::path("content.md"));
-        if (res == ContentLoadResult::Success) return res;
-    }
 #endif
     return LoadFromMarkdownString(kEmbeddedContentMd);
 }
@@ -180,12 +105,14 @@ ContentLoadResult ContentEngine::LoadFromMarkdownResource(HINSTANCE hInstance, i
     }
     HGLOBAL hData = LoadResource(hInstance, hRes);
     if (!hData) {
+        std::lock_guard<std::mutex> lock(m_mutex);
         m_lastError = L"Embedded content resource failed to load";
         return ContentLoadResult::FileNotFound;
     }
     const char* pBuf = reinterpret_cast<const char*>(LockResource(hData));
     DWORD sz = SizeofResource(hInstance, hRes);
     if (!pBuf || sz == 0) {
+        std::lock_guard<std::mutex> lock(m_mutex);
         m_lastError = L"Embedded content resource is empty";
         return ContentLoadResult::EmptyContent;
     }
@@ -236,7 +163,7 @@ ContentLoadResult ContentEngine::LoadFromMarkdownString(const std::string& markd
         if (dotPos != std::string::npos && dotPos > 0) {
             bool isNum = true;
             for (size_t i = 0; i < dotPos; ++i) {
-                if (!isdigit(line[i])) { isNum = false; break; }
+                if (!isdigit(static_cast<unsigned char>(line[i]))) { isNum = false; break; }
             }
             if (isNum) {
                 textStart = dotPos + 2;
@@ -251,7 +178,19 @@ ContentLoadResult ContentEngine::LoadFromMarkdownString(const std::string& markd
         if (textStart != std::string::npos) {
             ContentItem item;
             item.id = currentCategory + "_" + std::to_string(items.size() + 1);
-            item.text = Utf8ToWide(line.substr(textStart));
+            std::istringstream fields(line.substr(textStart));
+            std::vector<std::wstring> values;
+            std::string field;
+            while (std::getline(fields, field, '|')) {
+                auto first = field.find_first_not_of(" \t");
+                auto last = field.find_last_not_of(" \t");
+                values.push_back(first == std::string::npos ? L"" : Utf8ToWide(field.substr(first, last - first + 1)));
+            }
+            if (values.empty()) continue;
+            item.text = values[0];
+            if (values.size() > 1) item.transliteration = values[1];
+            if (values.size() > 2) item.description = values[2];
+            if (values.size() > 3) item.source = values[3];
             item.category = currentCategory;
             item.priority = 1;
             item.enabled = true;
@@ -265,6 +204,7 @@ ContentLoadResult ContentEngine::LoadFromMarkdownString(const std::string& markd
     }
 
     m_items = std::move(items);
+    m_current = nullptr;
     m_lastError.clear();
 
     auto recentIds = Database::Instance().GetRecentContentIds(kHistoryWindow);
@@ -276,27 +216,42 @@ ContentLoadResult ContentEngine::LoadFromMarkdownString(const std::string& markd
 }
 
 ContentLoadResult ContentEngine::LoadFromMarkdownFile(const std::filesystem::path& filePath) {
-    m_lastFilePath = filePath;
     std::ifstream f(filePath, std::ios::binary);
     if (!f.is_open()) {
+        std::lock_guard<std::mutex> lock(m_mutex);
         m_lastError = L"Content file not found";
         return ContentLoadResult::FileNotFound;
     }
     std::string str((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
-    return LoadFromMarkdownString(str);
+    auto result = LoadFromMarkdownString(str);
+    if (result == ContentLoadResult::Success) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_lastFilePath = filePath;
+    }
+    return result;
 }
 
 ContentLoadResult ContentEngine::Reload() {
-    if (m_lastFilePath.empty()) return LoadFromResource();
-    return Load(m_lastFilePath);
+    std::filesystem::path source;
+    { std::lock_guard<std::mutex> lock(m_mutex); source = m_lastFilePath; }
+    return source.empty() ? LoadFromResource() : Load(source);
 }
 
-void ContentEngine::Save() {
+bool ContentEngine::Save() {
     std::lock_guard<std::mutex> lock(m_mutex);
     // Always save to the dedicated AppData path if set; otherwise fall back to source path
     const auto& saveTo = m_savePath.empty() ? m_lastFilePath : m_savePath;
-    if (saveTo.empty()) return;
+    return SaveToLocked(saveTo);
+}
 
+bool ContentEngine::Export(const std::filesystem::path& path) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return SaveToLocked(path);
+}
+
+bool ContentEngine::SaveToLocked(const std::filesystem::path& saveTo) {
+    if (saveTo.empty()) { m_lastError = L"No library save path configured"; return false; }
+    try {
     json j = json::array();
     for (const auto& item : m_items) {
         json obj;
@@ -312,26 +267,17 @@ void ContentEngine::Save() {
         j.push_back(obj);
     }
 
-    // Write to temp then rename atomically
-    auto tmpPath = saveTo;
-    tmpPath += ".tmp";
-    {
-        std::ofstream out(tmpPath, std::ios::binary);
-        if (!out.is_open()) return;
-        std::string jsonStr = j.dump(4);
-        out << jsonStr;
-        out.flush();
-        if (out.fail()) {
-            std::error_code ec;
-            std::filesystem::remove(tmpPath, ec);
-            return;
-        }
+    if (!WriteFileAtomically(saveTo, j.dump(4))) {
+        m_lastError = L"Could not save the library; previous file retained";
+        LOG_ERROR("Could not replace content file");
+        return false;
     }
-    std::error_code ec;
-    std::filesystem::rename(tmpPath, saveTo, ec);
-    if (ec) {
-        std::filesystem::copy_file(tmpPath, saveTo, std::filesystem::copy_options::overwrite_existing, ec);
-        std::filesystem::remove(tmpPath, ec);
+    m_lastError.clear();
+    return true;
+    } catch (const std::exception& error) {
+        m_lastError = L"Could not serialize the library; previous file retained";
+        LOG_ERROR(std::string("Could not save content: ") + error.what());
+        return false;
     }
 }
 
@@ -391,15 +337,12 @@ void ContentEngine::ClearAll() {
 
 const ContentItem* ContentEngine::GetNextPreview() const {
     std::lock_guard<std::mutex> lock(m_mutex);
-    if (m_items.empty()) return nullptr;
-    // Check if m_current is valid (points inside m_items memory block)
-    if (m_current >= m_items.data() && m_current < (m_items.data() + m_items.size())) {
-        if (m_current->enabled) return m_current;
+    thread_local ContentItem snapshot;
+    if (m_current && m_current->enabled) { snapshot = *m_current; return &snapshot; }
+    for (const auto& item : m_items) {
+        if (item.enabled) { snapshot = item; return &snapshot; }
     }
-    for (const auto& it : m_items) {
-        if (it.enabled) return &it;
-    }
-    return &m_items[0];
+    return nullptr;
 }
 
 ContentLoadResult ContentEngine::ParseAndValidate(const std::filesystem::path& filePath,
@@ -416,6 +359,7 @@ ContentLoadResult ContentEngine::ParseAndValidate(const std::filesystem::path& f
     char bom[3] = {};
     f.read(bom, 3);
     if (!(bom[0] == '\xEF' && bom[1] == '\xBB' && bom[2] == '\xBF')) {
+        f.clear();
         f.seekg(0);
     }
 
@@ -516,13 +460,11 @@ ContentLoadResult ContentEngine::ParseAndValidate(const std::filesystem::path& f
         if (entry.contains("enabled") && entry["enabled"].is_boolean())
             item.enabled = entry["enabled"].get<bool>();
 
-        if (item.enabled) {
-            items.push_back(std::move(item));
-        }
+        items.push_back(std::move(item));
     }
 
-    if (items.empty()) {
-        errorOut = L"No valid enabled content items found";
+    if (items.empty() && !itemsArray.empty()) {
+        errorOut = L"No valid content items found";
         return ContentLoadResult::EmptyContent;
     }
 
@@ -612,11 +554,12 @@ const ContentItem* ContentEngine::GetNext() {
     // Build weights
     std::vector<double> weights(m_items.size());
     for (size_t i = 0; i < m_items.size(); ++i) {
-        weights[i] = ComputeWeight(m_items[i], i);
+        weights[i] = m_items[i].enabled ? ComputeWeight(m_items[i], i) : 0.0;
     }
 
     // Weighted random selection
     double total = std::accumulate(weights.begin(), weights.end(), 0.0);
+    if (total <= 0.0) return nullptr;
     std::random_device rd;
     std::mt19937 rng(rd());
     std::uniform_real_distribution<double> dist(0.0, total);
@@ -626,7 +569,7 @@ const ContentItem* ContentEngine::GetNext() {
     double cumulative = 0.0;
     for (size_t i = 0; i < weights.size(); ++i) {
         cumulative += weights[i];
-        if (pick <= cumulative) {
+        if (weights[i] > 0.0 && pick < cumulative) {
             selected = i;
             break;
         }
@@ -638,16 +581,37 @@ const ContentItem* ContentEngine::GetNext() {
     m_recentIds.push_front(m_current->id);
     while (m_recentIds.size() > kHistoryWindow) m_recentIds.pop_back();
 
-    return m_current;
+    thread_local ContentItem snapshot;
+    snapshot = *m_current;
+    return &snapshot;
 }
 
 const ContentItem* ContentEngine::GetCurrent() const {
     std::lock_guard<std::mutex> lock(m_mutex);
-    if (m_items.empty()) return nullptr;
-    if (m_current >= m_items.data() && m_current < (m_items.data() + m_items.size())) {
-        return m_current;
-    }
-    return nullptr;
+    if (!m_current) return nullptr;
+    thread_local ContentItem snapshot;
+    snapshot = *m_current;
+    return &snapshot;
+}
+
+std::vector<ContentItem> ContentEngine::GetAllItems() const {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_items;
+}
+
+size_t ContentEngine::Count() const {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_items.size();
+}
+
+void ContentEngine::SetSavePath(const std::filesystem::path& path) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_savePath = path;
+}
+
+std::wstring ContentEngine::LastError() const {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_lastError;
 }
 
 std::vector<std::string> ContentEngine::GetCategories() const {

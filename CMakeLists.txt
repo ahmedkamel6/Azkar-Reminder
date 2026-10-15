@@ -1,8 +1,23 @@
 cmake_minimum_required(VERSION 3.20)
-project(DhikrReminder VERSION 1.2.4 LANGUAGES CXX C)
+project(DhikrReminder VERSION 1.2.5 LANGUAGES CXX C)
+
+if(UNIX)
+    set(QT_APP_DEFAULT ON)
+else()
+    set(QT_APP_DEFAULT OFF)
+endif()
+option(BUILD_QT_APP "Build Qt 6 cross-platform frontend" ${QT_APP_DEFAULT})
+
+if(APPLE AND NOT CMAKE_OSX_DEPLOYMENT_TARGET)
+    set(CMAKE_OSX_DEPLOYMENT_TARGET "12.0" CACHE STRING "Minimum macOS version" FORCE)
+endif()
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+include(CTest)
+file(READ "${CMAKE_SOURCE_DIR}/assets/content.md" AZKAR_CONTENT_MD)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/assets/content.md")
+configure_file(src/core/EmbeddedContent.h.in "${CMAKE_BINARY_DIR}/generated/azkar/EmbeddedContent.h" @ONLY)
 
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
@@ -49,6 +64,9 @@ if(WIN32)
         src/platform/windows/WindowsAutoStart.cpp
         src/platform/windows/WindowsFullScreenDetector.cpp
     )
+    if(BUILD_QT_APP)
+        list(APPEND PLATFORM_SOURCES src/platform/audio/MiniAudioEngine.cpp)
+    endif()
 elseif(APPLE)
     set(PLATFORM_SOURCES
         src/platform/macos/MacAutoStart.cpp
@@ -68,6 +86,7 @@ add_library(azkar_core STATIC
     ${PLATFORM_SOURCES}
 )
 target_include_directories(azkar_core PUBLIC
+    "${CMAKE_BINARY_DIR}/generated"
     src/core
     src/platform
     src
@@ -76,8 +95,9 @@ target_include_directories(azkar_core PUBLIC
 target_link_libraries(azkar_core PUBLIC
     sqlite3
 )
+target_compile_definitions(azkar_core PUBLIC AZKAR_APP_VERSION="${PROJECT_VERSION}")
 if(WIN32)
-    target_link_libraries(azkar_core PUBLIC shell32 user32)
+    target_link_libraries(azkar_core PUBLIC shell32 user32 ole32 advapi32)
 elseif(APPLE)
     target_link_libraries(azkar_core PUBLIC
         "-framework CoreGraphics"
@@ -86,14 +106,15 @@ elseif(APPLE)
         "-framework CoreAudio"
     )
 elseif(UNIX)
-    target_link_libraries(azkar_core PUBLIC ${CMAKE_DL_LIBS} pthread)
+    find_library(XCB_LIBRARY xcb REQUIRED)
+    target_link_libraries(azkar_core PUBLIC ${CMAKE_DL_LIBS} pthread ${XCB_LIBRARY})
 endif()
 
 # ─── Unit Tests: azkar_core_tests ─────────────────────────────────────────
-enable_testing()
-
+if(BUILD_TESTING)
 add_executable(azkar_core_tests
     tests/core/test_main.cpp
+    tests/core/test_regressions.cpp
 )
 target_include_directories(azkar_core_tests PRIVATE
     src
@@ -103,6 +124,20 @@ target_link_libraries(azkar_core_tests PRIVATE
     azkar_core
 )
 add_test(NAME CoreTests COMMAND azkar_core_tests)
+set_tests_properties(CoreTests PROPERTIES TIMEOUT 30)
+if(UNIX AND NOT APPLE)
+    add_executable(azkar_x11_tests tests/platform/test_fullscreen_x11.cpp)
+    target_link_libraries(azkar_x11_tests PRIVATE azkar_core)
+    add_test(NAME X11FullScreen COMMAND azkar_x11_tests)
+    set_tests_properties(X11FullScreen PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 10)
+endif()
+if(NOT WIN32 OR BUILD_QT_APP)
+    add_executable(azkar_audio_tests tests/core/test_audio.cpp)
+    target_link_libraries(azkar_audio_tests PRIVATE azkar_core)
+    add_test(NAME AudioRetry COMMAND azkar_audio_tests)
+    set_tests_properties(AudioRetry PROPERTIES TIMEOUT 10)
+endif()
+endif()
 
 # ─── Source files ─────────────────────────────────────────────────────────
 set(APP_SOURCES
@@ -210,69 +245,90 @@ install(DIRECTORY assets/audio
 endif()
 
 # ─── Qt 6 Frontend Target (Linux, macOS, and optional Windows) ─────────────
-option(BUILD_QT_APP "Build Qt 6 cross-platform frontend" OFF)
-if(UNIX OR APPLE)
-    set(BUILD_QT_APP ON)
-endif()
-
 if(BUILD_QT_APP)
-    find_package(Qt6 COMPONENTS Core Gui Widgets QUIET)
-    if(Qt6_FOUND)
-        set(CMAKE_AUTOMOC ON)
-        set(CMAKE_AUTORCC ON)
-        set(CMAKE_AUTOUIC ON)
-
-        set(QT_UI_SOURCES
-            src/ui/qt/ThemeManager.cpp
-            src/ui/qt/PopupWindow.cpp
-            src/ui/qt/MainWindow.cpp
-            src/ui/qt/TrayController.cpp
-        )
-
-        add_executable(azkar_reminder
-            src/main_qt.cpp
-            ${QT_UI_SOURCES}
-        )
-
-        target_include_directories(azkar_reminder PRIVATE
-            src
-            src/platform
-            src/ui/qt
-            third_party
-        )
-
-        target_link_libraries(azkar_reminder PRIVATE
-            azkar_core
-            Qt6::Core
-            Qt6::Gui
-            Qt6::Widgets
-        )
-
-        if(UNIX AND NOT APPLE)
-            target_link_libraries(azkar_reminder PRIVATE dl pthread)
-        endif()
-
-        if(APPLE)
-            target_link_libraries(azkar_reminder PRIVATE
-                "-framework CoreGraphics"
-                "-framework AppKit"
-                "-framework AudioToolbox"
-                "-framework CoreAudio"
-            )
-            set_target_properties(azkar_reminder PROPERTIES
-                OUTPUT_NAME "Azkar Reminder"
-                MACOSX_BUNDLE TRUE
-                MACOSX_BUNDLE_BUNDLE_NAME "Azkar Reminder"
-                MACOSX_BUNDLE_GUI_IDENTIFIER "com.azkar.reminder"
-                MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"
-                MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
-                MACOSX_BUNDLE_ICON_FILE "AzkarReminder.icns"
-                MACOSX_BUNDLE_INFO_PLIST "${CMAKE_SOURCE_DIR}/assets/Info.plist.in"
-            )
-        endif()
-        message(STATUS "Qt 6 frontend target 'azkar_reminder' enabled")
-    else()
-        message(STATUS "Qt 6 not found in build environment. Qt UI target azkar_reminder skipped.")
+    find_package(Qt6 6.2 COMPONENTS Core Gui Widgets Network REQUIRED)
+    if(UNIX AND NOT APPLE)
+        find_package(Qt6 6.2 REQUIRED COMPONENTS DBus)
     endif()
+    set(CMAKE_AUTOMOC ON)
+    set(CMAKE_AUTORCC ON)
+    set(CMAKE_AUTOUIC ON)
+
+    set(QT_UI_SOURCES
+        src/ui/qt/ThemeManager.cpp
+        src/ui/qt/PopupWindow.cpp
+        src/ui/qt/MainWindow.cpp
+        src/ui/qt/RemindersPage.cpp
+        src/ui/qt/LibraryPage.cpp
+        src/ui/qt/SettingsPage.cpp
+        src/ui/qt/TrayController.cpp
+    )
+
+    add_library(azkar_qt_ui OBJECT ${QT_UI_SOURCES} assets/qt.qrc)
+    target_include_directories(azkar_qt_ui PUBLIC src src/platform src/ui/qt third_party)
+    target_link_libraries(azkar_qt_ui PUBLIC azkar_core Qt6::Core Qt6::Gui Qt6::Widgets)
+    if(UNIX AND NOT APPLE)
+        target_link_libraries(azkar_qt_ui PUBLIC Qt6::DBus)
+    endif()
+    add_executable(azkar_reminder src/main_qt.cpp)
+    target_link_libraries(azkar_reminder PRIVATE azkar_qt_ui)
+    if(BUILD_TESTING)
+        find_package(Qt6 REQUIRED COMPONENTS Test)
+        add_executable(azkar_ui_tests tests/ui/test_main.cpp)
+        target_link_libraries(azkar_ui_tests PRIVATE azkar_qt_ui Qt6::Test)
+        add_test(NAME UiTests COMMAND azkar_ui_tests)
+        set_tests_properties(UiTests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
+    endif()
+
+    target_include_directories(azkar_reminder PRIVATE
+        src
+        src/platform
+        src/ui/qt
+        third_party
+    )
+
+    target_link_libraries(azkar_reminder PRIVATE
+        azkar_core
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Widgets
+        Qt6::Network
+    )
+    if(APPLE)
+        set(QT_AUDIO_DIR "$<TARGET_BUNDLE_CONTENT_DIR:azkar_reminder>/Resources/audio")
+    else()
+        set(QT_AUDIO_DIR "$<TARGET_FILE_DIR:azkar_reminder>/audio")
+    endif()
+    add_custom_command(TARGET azkar_reminder POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_SOURCE_DIR}/assets/audio" "${QT_AUDIO_DIR}")
+
+    if(UNIX AND NOT APPLE)
+        target_link_libraries(azkar_reminder PRIVATE dl pthread Qt6::DBus)
+    endif()
+
+    if(APPLE)
+        target_link_libraries(azkar_reminder PRIVATE
+            "-framework CoreGraphics"
+            "-framework AppKit"
+            "-framework AudioToolbox"
+            "-framework CoreAudio"
+        )
+        set_target_properties(azkar_reminder PROPERTIES
+            OUTPUT_NAME "Azkar Reminder"
+        MACOSX_BUNDLE TRUE
+            MACOSX_BUNDLE_BUNDLE_NAME "Azkar Reminder"
+        MACOSX_BUNDLE_ICON_FILE "AzkarReminder.icns"
+        MACOSX_BUNDLE_INFO_PLIST "${CMAKE_SOURCE_DIR}/assets/Info.plist.in"
+            MACOSX_BUNDLE_GUI_IDENTIFIER "com.azkar.reminder"
+            MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"
+            MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
+        )
+    endif()
+    install(TARGETS azkar_reminder RUNTIME DESTINATION bin BUNDLE DESTINATION .)
+    if(UNIX AND NOT APPLE)
+        install(DIRECTORY assets/audio DESTINATION share/azkar-reminder)
+        install(FILES assets/content.md DESTINATION share/azkar-reminder)
+    endif()
+    message(STATUS "Qt 6 frontend target 'azkar_reminder' enabled")
 endif()
 

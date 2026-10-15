@@ -77,6 +77,7 @@ private:
     IDWriteFactory*  m_dwriteFactory = nullptr;
 
     bool             m_initialized   = false;
+    bool             m_settingsReady = false;
     bool             m_shuttingDown  = false;
     HANDLE           m_hCairoFont    = nullptr;
 };

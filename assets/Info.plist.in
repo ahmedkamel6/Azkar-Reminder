@@ -18,21 +18,13 @@
     <key>CFBundleSignature</key>
     <string>????</string>
     <key>CFBundleExecutable</key>
-    <string>Azkar Reminder</string>
+    <string>@MACOSX_BUNDLE_EXECUTABLE_NAME@</string>
 
     <!-- Icon -->
     <key>CFBundleIconFile</key>
     <string>AzkarReminder.icns</string>
 
-    <!-- ═══════════════════════════════════════════════════════════════
-         CRITICAL: LSUIElement = 1
-         Makes the app a "background-only" / "agent" app:
-         - No Dock icon shown
-         - No app menu bar entry
-         - Works purely as a system tray (NSStatusItem) app
-         Without this, macOS treats it as a normal GUI app and when
-         the main window is hidden, the app appears to do nothing.
-    ═══════════════════════════════════════════════════════════════ -->
+    <!-- Run as a menu bar agent while retaining the settings window. -->
     <key>LSUIElement</key>
     <true/>
 
@@ -42,7 +34,7 @@
 
     <!-- macOS minimum version -->
     <key>LSMinimumSystemVersion</key>
-    <string>11.0</string>
+    <string>@CMAKE_OSX_DEPLOYMENT_TARGET@</string>
 
     <!-- Supported platforms -->
     <key>CFBundleSupportedPlatforms</key>
@@ -54,13 +46,7 @@
     <key>NSHighResolutionCapable</key>
     <true/>
 
-    <!-- Privacy: this app does NOT access camera/mic/location -->
-    <key>NSCameraUsageDescription</key>
-    <string></string>
-    <key>NSMicrophoneUsageDescription</key>
-    <string></string>
-
-    <!-- Allow app to run in background (needed for reminder scheduler) -->
+    <!-- Network loads are not required for reminders. -->
     <key>NSAppTransportSecurity</key>
     <dict>
         <key>NSAllowsArbitraryLoads</key>

@@ -1,7 +1,10 @@
 #include "LinuxAutoStart.h"
 #include "../../core/Logger.h"
+#include "../../core/PlatformPaths.h"
 #include <fstream>
 #include <cstdlib>
+#include <sstream>
+#include "../../core/AtomicFile.h"
 
 #ifndef _WIN32
 #ifndef __APPLE__
@@ -13,20 +16,13 @@ std::unique_ptr<IAutoStart> IAutoStart::Create() {
 }
 
 std::filesystem::path LinuxAutoStart::GetAutostartDesktopFilePath() {
-    const char* xdgConfig = std::getenv("XDG_CONFIG_HOME");
-    std::filesystem::path configDir;
-    if (xdgConfig && *xdgConfig) {
-        configDir = std::filesystem::path(xdgConfig);
-    } else {
-        const char* home = std::getenv("HOME");
-        configDir = (home && *home) ? (std::filesystem::path(home) / ".config") : std::filesystem::path("/tmp");
-    }
-    return configDir / "autostart" / "azkar-reminder.desktop";
+    return PlatformPaths::GetConfigDir().parent_path() / "autostart" / "azkar-reminder.desktop";
 }
 
 bool LinuxAutoStart::IsAutoStartEnabled() const {
     auto path = GetAutostartDesktopFilePath();
-    if (!std::filesystem::exists(path)) return false;
+    std::error_code error;
+    if (!std::filesystem::exists(path, error) || error) return false;
 
     std::ifstream file(path);
     if (!file.is_open()) return false;
@@ -60,15 +56,15 @@ bool LinuxAutoStart::SetAutoStartEnabled(bool enable, const std::filesystem::pat
     // Determine binary execution path
     std::filesystem::path execPath = appPath;
     if (execPath.empty()) {
-        const char* appimageEnv = std::getenv("APPIMAGE");
-        if (appimageEnv && *appimageEnv) {
-            execPath = appimageEnv;
-        } else {
-            try {
-                execPath = std::filesystem::canonical("/proc/self/exe");
-            } catch (...) {
-                execPath = "/usr/bin/azkar-reminder";
-            }
+        const char* appImage = std::getenv("APPIMAGE");
+        if (appImage && *appImage && std::filesystem::path(appImage).is_absolute()) execPath = appImage;
+    }
+    if (execPath.empty()) {
+        try {
+            execPath = std::filesystem::canonical("/proc/self/exe");
+        } catch (...) {
+            LOG_ERROR("Could not resolve autostart executable");
+            return false;
         }
     }
 
@@ -79,27 +75,31 @@ bool LinuxAutoStart::SetAutoStartEnabled(bool enable, const std::filesystem::pat
         return false;
     }
 
-    std::ofstream out(desktopPath);
-    if (!out.is_open()) {
-        LOG_ERROR("Failed to open autostart desktop file for writing: " + desktopPath.string());
-        return false;
+    std::string quotedPath;
+    for (char character : execPath.string()) {
+        if (character == '\n' || character == '\r' || character == '=') return false;
+        if (character == '%') quotedPath += "%%";
+        else if (character == '\\') quotedPath += "\\\\\\\\";
+        else if (character == '"') quotedPath += "\\\\\\\"";
+        else if (character == '$' || character == '`') { quotedPath += "\\\\"; quotedPath += character; }
+        else quotedPath += character;
     }
+
+    std::ostringstream out;
 
     out << "[Desktop Entry]\n";
     out << "Type=Application\n";
     out << "Version=1.0\n";
     out << "Name=Azkar Reminder\n";
     out << "GenericName=Islamic Dhikr & Dua Reminder\n";
-    out << "Comment=Quiet and beautiful Islamic Dhikr reminder\n";
-    out << "Exec=\"" << execPath.string() << "\" --background\n";
+    out << "Comment=Scheduled desktop dhikr reminders\n";
+    out << "Exec=\"" << quotedPath << "\" --background\n";
     out << "Icon=azkar-reminder\n";
     out << "Terminal=false\n";
     out << "Categories=Utility;Clock;Qt;\n";
     out << "StartupNotify=false\n";
     out << "X-GNOME-Autostart-enabled=true\n";
-    out.flush();
-
-    if (out.fail()) {
+    if (!WriteFileAtomically(desktopPath, out.str())) {
         LOG_ERROR("Failed writing desktop file content");
         return false;
     }

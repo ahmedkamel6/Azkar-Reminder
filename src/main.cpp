@@ -1,5 +1,6 @@
 #include "core/Application.h"
 #include "resource.h"
+#include "platform/IAutoStart.h"
 #include <windows.h>
 #include <shobjidl.h>
 #include <string>
@@ -44,15 +45,15 @@ int APIENTRY wWinMain(HINSTANCE hInstance,
     }
 
     if (lpCmdLine && wcsstr(lpCmdLine, L"--setup-autostart") != nullptr) {
-        dhikr::Application::Instance().SetStartWithWindows(true);
+        const bool success = dhikr::IAutoStart::Create()->SetAutoStartEnabled(true);
         if (hMutex) CloseHandle(hMutex);
-        return 0;
+        return success ? 0 : 1;
     }
 
     if (lpCmdLine && wcsstr(lpCmdLine, L"--remove-autostart") != nullptr) {
-        dhikr::Application::Instance().SetStartWithWindows(false);
+        const bool success = dhikr::IAutoStart::Create()->SetAutoStartEnabled(false);
         if (hMutex) CloseHandle(hMutex);
-        return 0;
+        return success ? 0 : 1;
     }
 
     // ── COM initialization (needed for tray, shell, dialogs) ──────────────
@@ -74,6 +75,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance,
             L"Azkar Reminder failed to start.\n\nPlease check the log file in %LOCALAPPDATA%\\Azkar Reminder\\logs.",
             L"Azkar Reminder — Startup Error",
             MB_ICONERROR | MB_OK);
+        app.Shutdown();
         CoUninitialize();
         if (hMutex) CloseHandle(hMutex);
         return 1;
@@ -81,6 +83,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance,
 
     // ── Run ────────────────────────────────────────────────────────────────
     int result = app.Run();
+    app.Shutdown();
 
     // ── Cleanup ────────────────────────────────────────────────────────────
     CoUninitialize();

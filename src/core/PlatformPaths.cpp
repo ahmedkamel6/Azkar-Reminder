@@ -44,7 +44,7 @@ std::filesystem::path PlatformPaths::GetConfigDir() {
 #else
     // Linux XDG_CONFIG_HOME
     const char* xdgConfig = std::getenv("XDG_CONFIG_HOME");
-    if (xdgConfig && *xdgConfig) {
+    if (xdgConfig && *xdgConfig && std::filesystem::path(xdgConfig).is_absolute()) {
         return std::filesystem::path(xdgConfig) / "azkar-reminder";
     }
     return GetHomeDir() / ".config" / "azkar-reminder";
@@ -59,7 +59,7 @@ std::filesystem::path PlatformPaths::GetDataDir() {
 #else
     // Linux XDG_DATA_HOME
     const char* xdgData = std::getenv("XDG_DATA_HOME");
-    if (xdgData && *xdgData) {
+    if (xdgData && *xdgData && std::filesystem::path(xdgData).is_absolute()) {
         return std::filesystem::path(xdgData) / "azkar-reminder";
     }
     return GetHomeDir() / ".local" / "share" / "azkar-reminder";
@@ -74,7 +74,7 @@ std::filesystem::path PlatformPaths::GetLogsDir() {
 #else
     // Linux XDG_STATE_HOME or fallback to data/logs
     const char* xdgState = std::getenv("XDG_STATE_HOME");
-    if (xdgState && *xdgState) {
+    if (xdgState && *xdgState && std::filesystem::path(xdgState).is_absolute()) {
         return std::filesystem::path(xdgState) / "azkar-reminder" / "logs";
     }
     return GetDataDir() / "logs";

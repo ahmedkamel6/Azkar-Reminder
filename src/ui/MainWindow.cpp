@@ -104,7 +104,7 @@ void MainWindow::RegisterClass(HINSTANCE hInstance) {
         bigResId = IDI_APP_DORMANT_ICON;
         smallResId = IDI_APP_DORMANT_SMALL;
     } else {
-        switch (Settings::Instance().Get().colorTheme) {
+        switch (Settings::Instance().GetCopy().colorTheme) {
             case ColorTheme::Yellow: bigResId = IDI_APP_YELLOW_ICON; smallResId = IDI_APP_YELLOW_SMALL; break;
             case ColorTheme::Blue:   bigResId = IDI_APP_BLUE_ICON;   smallResId = IDI_APP_BLUE_SMALL;   break;
             case ColorTheme::Red:    bigResId = IDI_APP_RED_ICON;    smallResId = IDI_APP_RED_SMALL;    break;
@@ -451,7 +451,7 @@ void MainWindow::DrawBackground(ID2D1RenderTarget* rt) {
         rt->FillRectangle(D2D1::RectF(0.0f, 0.0f, (float)m_width, (float)m_height), m_brush);
     }
 
-    if (Settings::Instance().Get().arabesqueOverlay) {
+    if (Settings::Instance().GetCopy().arabesqueOverlay) {
         ds::Arabesque::DrawLattice(rt, D2D1::RectF(0.0f, 0.0f, (float)m_width, (float)m_height), 0.025f);
     }
 }
@@ -574,7 +574,7 @@ ID2D1Bitmap* MainWindow::GetEffectiveLogo(bool isSmall) const {
         }
         return m_logoDormantBitmap ? m_logoDormantBitmap : m_logoDormantSmallBitmap;
     }
-    return GetThemeLogo(Settings::Instance().Get().colorTheme, isSmall);
+    return GetThemeLogo(Settings::Instance().GetCopy().colorTheme, isSmall);
 }
 
 void MainWindow::DrawEffectiveLogo(ID2D1RenderTarget* rt, const D2D1_RECT_F& dest, bool isSmall, float alpha) const {
@@ -702,6 +702,7 @@ LRESULT MainWindow::OnCommand(WPARAM wp) {
 }
 
 LRESULT MainWindow::OnReminder(bool forcePreview) {
+    if (!forcePreview && (Scheduler::Instance().IsPaused() || !Settings::Instance().GetCopy().remindersEnabled)) return 0;
     if (forcePreview) {
         auto* item = ContentEngine::Instance().GetNext();
         if (item) {
@@ -716,7 +717,7 @@ LRESULT MainWindow::OnReminder(bool forcePreview) {
     auto* item = ContentEngine::Instance().GetNext();
     if (item) {
         // Fullscreen distraction protection check
-        if (Settings::Instance().Get().suppressDuringFullscreen && FullScreenDetector::Instance().IsFullScreenActive()) {
+        if (Settings::Instance().GetCopy().suppressDuringFullscreen && FullScreenDetector::Instance().IsFullScreenActive()) {
             HWND fg = GetForegroundWindow();
             wchar_t fgTitle[128] = { 0 };
             wchar_t fgClass[64]  = { 0 };
@@ -726,7 +727,7 @@ LRESULT MainWindow::OnReminder(bool forcePreview) {
             }
             std::string fgInfo = "FG: '" + WStringToUtf8(fgTitle) + "' [" + WStringToUtf8(fgClass) + "]";
 
-            int mode = Settings::Instance().Get().fullscreenSuppressionMode;
+            int mode = Settings::Instance().GetCopy().fullscreenSuppressionMode;
             if (mode == 2) {
                 // Windows notification only
                 LOG_INFO("[FULLSCREEN] Fullscreen active (" + fgInfo + ") — delivering via quiet notification");
@@ -773,7 +774,7 @@ void MainWindow::UpdateAppIcon(ColorTheme themeOverride) {
     int smallResId = IDI_APP_ICON_SMALL;
 
     ColorTheme activeTheme = (themeOverride != static_cast<ColorTheme>(-1)) ? themeOverride
-        : (ds::Accent::IsTransitioning() ? m_targetTheme : Settings::Instance().Get().colorTheme);
+        : (ds::Accent::IsTransitioning() ? m_targetTheme : Settings::Instance().GetCopy().colorTheme);
 
     if (ds::Accent::IsAppPaused()) {
         bigResId = IDI_APP_DORMANT_ICON;
@@ -819,7 +820,7 @@ inline float EaseInOutCubic(float t) {
 }
 
 void MainWindow::TransitionToTheme(ColorTheme newTheme) {
-    ColorTheme oldTheme = Settings::Instance().Get().colorTheme;
+    ColorTheme oldTheme = Settings::Instance().GetCopy().colorTheme;
     if (oldTheme == newTheme && !ds::Accent::IsTransitioning()) return;
 
     m_prevTheme = ds::Accent::IsTransitioning() ? ds::Accent::ToTheme() : oldTheme;
@@ -885,7 +886,7 @@ LRESULT MainWindow::OnTimer(UINT_PTR timerId) {
             KillTimer(m_hwnd, TIMER_THEME_TRANSITION);
             ds::Accent::EndTransition(m_targetTheme);
 
-            auto& s = Settings::Instance().Get();
+            Settings::Instance().Modify([this](AppSettings& s) {
             s.colorTheme = m_targetTheme;
             switch (m_targetTheme) {
                 case ColorTheme::Yellow: s.accentColor = { 0xFA, 0xCC, 0x15 }; break;
@@ -896,6 +897,7 @@ LRESULT MainWindow::OnTimer(UINT_PTR timerId) {
                 case ColorTheme::Green:
                 default:                 s.accentColor = { 0xB7, 0xF3, 0x4A }; break;
             }
+            });
             Settings::Instance().Save();
 
             TrayIcon::Instance().UpdateIcon();
@@ -908,6 +910,11 @@ LRESULT MainWindow::OnTimer(UINT_PTR timerId) {
         return 0;
     }
     if (timerId == TIMER_FULLSCREEN_RESUME) {
+        if (Scheduler::Instance().GetState() != ScheduleState::Active) {
+            m_pendingFullscreenReminder.reset();
+            KillTimer(m_hwnd, TIMER_FULLSCREEN_RESUME);
+            return 0;
+        }
         if (m_pendingFullscreenReminder) {
             if (!FullScreenDetector::Instance().IsFullScreenActive()) {
                 KillTimer(m_hwnd, TIMER_FULLSCREEN_RESUME);

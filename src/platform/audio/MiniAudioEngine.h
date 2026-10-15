@@ -4,6 +4,7 @@
 #include <atomic>
 #include <string>
 #include <filesystem>
+#include <chrono>
 
 // Forward declaration of miniaudio types
 struct ma_engine;
@@ -26,6 +27,8 @@ public:
     bool IsAvailable() const override;
 
 private:
+    bool InitializeLocked();
+    bool LoadSoundLocked();
     std::filesystem::path ResolveSoundFilePath() const;
 
     mutable std::mutex   m_mutex;
@@ -33,6 +36,7 @@ private:
     ma_sound*            m_sound  = nullptr;
     std::atomic<bool>    m_initialized{false};
     std::filesystem::path m_loadedPath;
+    std::chrono::steady_clock::time_point m_nextRetry{};
 };
 
 } // namespace dhikr

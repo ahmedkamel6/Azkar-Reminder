@@ -2,110 +2,57 @@
 #include "../../core/Logger.h"
 #include <cstdlib>
 #include <cstring>
-
-#ifndef _WIN32
-#ifndef __APPLE__
-#include <dlfcn.h>
+#include <memory>
+#if defined(__linux__)
+#include <xcb/xcb.h>
 
 namespace dhikr {
-
 std::unique_ptr<IFullScreenDetector> IFullScreenDetector::Create() {
     return std::make_unique<LinuxFullScreenDetector>();
 }
 
 LinuxFullScreenDetector::LinuxFullScreenDetector() {
-    const char* wayland = std::getenv("WAYLAND_DISPLAY");
-    const char* session = std::getenv("XDG_SESSION_TYPE");
-    if ((wayland && *wayland) || (session && strcmp(session, "wayland") == 0)) {
-        m_isWayland = true;
-        LOG_INFO("Linux window session: Wayland detected (fullscreen external query restricted)");
-    } else {
-        m_isWayland = false;
-        LOG_INFO("Linux window session: X11 detected");
-    }
+    const auto* wayland = std::getenv("WAYLAND_DISPLAY");
+    const auto* session = std::getenv("XDG_SESSION_TYPE");
+    m_isWayland = (wayland && *wayland) || (session && std::strcmp(session, "wayland") == 0);
 }
-
 LinuxFullScreenDetector::~LinuxFullScreenDetector() = default;
 
 FullScreenState LinuxFullScreenDetector::CheckFullScreen() {
-    if (m_isWayland) {
-        // Wayland security model intentionally prohibits querying foreign window geometries
-        return FullScreenState::Unsupported;
+    if (m_isWayland) return FullScreenState::Unsupported;
+    int screenNumber = 0;
+    std::unique_ptr<xcb_connection_t, decltype(&xcb_disconnect)> connection(xcb_connect(nullptr, &screenNumber), xcb_disconnect);
+    if (!connection || xcb_connection_has_error(connection.get())) return FullScreenState::Unknown;
+    auto screens = xcb_setup_roots_iterator(xcb_get_setup(connection.get()));
+    for (int index = 0; index < screenNumber && screens.rem; ++index) xcb_screen_next(&screens);
+    if (!screens.rem) return FullScreenState::Unknown;
+    auto atom = [&](const char* name) {
+        const auto cookie = xcb_intern_atom(connection.get(), 0, static_cast<uint16_t>(std::strlen(name)), name);
+        std::unique_ptr<xcb_intern_atom_reply_t, decltype(&std::free)> reply(xcb_intern_atom_reply(connection.get(), cookie, nullptr), std::free);
+        return reply ? reply->atom : XCB_ATOM_NONE;
+    };
+    const auto activeAtom = atom("_NET_ACTIVE_WINDOW");
+    const auto stateAtom = atom("_NET_WM_STATE");
+    const auto fullscreenAtom = atom("_NET_WM_STATE_FULLSCREEN");
+    if (!activeAtom || !stateAtom || !fullscreenAtom) return FullScreenState::Unknown;
+    auto cookie = xcb_get_property(connection.get(), 0, screens.data->root, activeAtom, XCB_ATOM_WINDOW, 0, 1);
+    std::unique_ptr<xcb_get_property_reply_t, decltype(&std::free)> active(xcb_get_property_reply(connection.get(), cookie, nullptr), std::free);
+    if (!active) return FullScreenState::Unknown;
+    if (active->type == XCB_ATOM_NONE) return FullScreenState::NotFullScreen;
+    if (active->type != XCB_ATOM_WINDOW || active->format != 32 || active->value_len != 1) return FullScreenState::Unknown;
+    const auto window = *static_cast<xcb_window_t*>(xcb_get_property_value(active.get()));
+    if (!window) return FullScreenState::NotFullScreen;
+    cookie = xcb_get_property(connection.get(), 0, window, stateAtom, XCB_ATOM_ATOM, 0, 1024);
+    std::unique_ptr<xcb_get_property_reply_t, decltype(&std::free)> state(xcb_get_property_reply(connection.get(), cookie, nullptr), std::free);
+    // A foreground window can disappear between these requests; XCB reports that without terminating the process.
+    if (!state) return FullScreenState::Unknown;
+    if (state->type == XCB_ATOM_NONE) return FullScreenState::NotFullScreen;
+    if (state->type != XCB_ATOM_ATOM || state->format != 32) return FullScreenState::Unknown;
+    const auto* values = static_cast<xcb_atom_t*>(xcb_get_property_value(state.get()));
+    for (uint32_t index = 0; index < state->value_len; ++index) {
+        if (values[index] == fullscreenAtom) return FullScreenState::FullScreen;
     }
-
-    // Dynamic X11 inspection
-    void* x11 = dlopen("libX11.so.6", RTLD_LAZY);
-    if (!x11) {
-        return FullScreenState::Unknown;
-    }
-
-    typedef void* (*XOpenDisplayFn)(const char*);
-    typedef int   (*XCloseDisplayFn)(void*);
-    typedef unsigned long (*XDefaultRootWindowFn)(void*);
-    typedef unsigned long (*XInternAtomFn)(void*, const char*, int);
-    typedef int   (*XGetWindowPropertyFn)(void*, unsigned long, unsigned long, long, long, int, unsigned long,
-                                          unsigned long*, int*, unsigned long*, unsigned long*, unsigned char**);
-    typedef int   (*XFreeFn)(void*);
-
-    auto pXOpenDisplay        = (XOpenDisplayFn)dlsym(x11, "XOpenDisplay");
-    auto pXCloseDisplay       = (XCloseDisplayFn)dlsym(x11, "XCloseDisplay");
-    auto pXDefaultRootWindow  = (XDefaultRootWindowFn)dlsym(x11, "XDefaultRootWindow");
-    auto pXInternAtom         = (XInternAtomFn)dlsym(x11, "XInternAtom");
-    auto pXGetWindowProperty  = (XGetWindowPropertyFn)dlsym(x11, "XGetWindowProperty");
-    auto pXFree               = (XFreeFn)dlsym(x11, "XFree");
-
-    if (!pXOpenDisplay || !pXCloseDisplay || !pXDefaultRootWindow ||
-        !pXInternAtom || !pXGetWindowProperty || !pXFree) {
-        dlclose(x11);
-        return FullScreenState::Unknown;
-    }
-
-    void* display = pXOpenDisplay(nullptr);
-    if (!display) {
-        dlclose(x11);
-        return FullScreenState::Unknown;
-    }
-
-    unsigned long root = pXDefaultRootWindow(display);
-    unsigned long netActive = pXInternAtom(display, "_NET_ACTIVE_WINDOW", 0);
-    unsigned long netWmState = pXInternAtom(display, "_NET_WM_STATE", 0);
-    unsigned long netWmStateFs = pXInternAtom(display, "_NET_WM_STATE_FULLSCREEN", 0);
-
-    FullScreenState result = FullScreenState::NotFullScreen;
-
-    unsigned long actualType = 0;
-    int actualFormat = 0;
-    unsigned long nItems = 0;
-    unsigned long bytesAfter = 0;
-    unsigned char* prop = nullptr;
-
-    if (pXGetWindowProperty(display, root, netActive, 0, 1, 0, (unsigned long)33 /* XA_WINDOW */,
-                            &actualType, &actualFormat, &nItems, &bytesAfter, &prop) == 0 && prop) {
-        unsigned long activeWindow = *(unsigned long*)prop;
-        pXFree(prop);
-
-        if (activeWindow != 0) {
-            unsigned char* stateProp = nullptr;
-            if (pXGetWindowProperty(display, activeWindow, netWmState, 0, 1024, 0, (unsigned long)4 /* XA_ATOM */,
-                                    &actualType, &actualFormat, &nItems, &bytesAfter, &stateProp) == 0 && stateProp) {
-                unsigned long* atoms = (unsigned long*)stateProp;
-                for (unsigned long i = 0; i < nItems; ++i) {
-                    if (atoms[i] == netWmStateFs) {
-                        result = FullScreenState::FullScreen;
-                        break;
-                    }
-                }
-                pXFree(stateProp);
-            }
-        }
-    }
-
-    pXCloseDisplay(display);
-    dlclose(x11);
-    return result;
+    return FullScreenState::NotFullScreen;
 }
-
 } // namespace dhikr
-
-#endif // !__APPLE__
-#endif // !_WIN32
+#endif

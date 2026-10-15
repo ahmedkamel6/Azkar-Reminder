@@ -896,7 +896,7 @@ bool RemindersPage::OnLButtonDown(int x, int y) {
     if (x >= saveR.left && x <= saveR.right && y >= saveR.top && y <= saveR.bottom) {
         if (m_hasUnsavedChanges) {
             float savedScroll = m_scrollY;
-            Settings::Instance().Update(m_pendingSettings);
+            Settings::Instance().UpdatePreferences(m_pendingSettings);
             Settings::Instance().Save();
             m_hasUnsavedChanges = false;
             MainWindow::Instance().OnSettingsChanged();

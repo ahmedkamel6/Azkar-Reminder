@@ -64,6 +64,8 @@ public:
     // Called on system wake from sleep/suspend
     void OnSystemWake();
 
+    static time_t NextReminder(const AppSettings& settings, time_t now);
+
     Scheduler(const Scheduler&) = delete;
     Scheduler& operator=(const Scheduler&) = delete;
 
@@ -76,14 +78,7 @@ private:
     // Returns time_t of next reminder, or 0 if none scheduled in range
     time_t ComputeNextReminderTime() const;
 
-    // Returns true if `lt` falls inside a quiet period defined in `s`
-    bool IsQuietTime(const dhikr::AppSettings& s, const struct tm& lt) const;
-
-    // Returns true if `t` is within today's scheduled window
-    bool IsInDayWindow(const struct tm& lt) const;
-
-    // Returns start of next window for a given day
-    time_t NextWindowStart(const struct tm& lt, int daysAhead = 0) const;
+    static bool IsQuietTime(const AppSettings& settings, const struct tm& localTime);
 
     TriggerCallback         m_onTrigger;
 #ifdef _WIN32

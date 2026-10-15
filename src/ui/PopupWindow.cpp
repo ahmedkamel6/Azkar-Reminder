@@ -317,7 +317,7 @@ void PopupWindow::Show(const ContentItem* item, bool force) {
     m_currentCounter = 1;
     m_targetCounter = (m_item && m_item->repetitions > 1) ? m_item->repetitions : 33;
 
-    const auto& s = Settings::Instance().Get();
+    const auto s = Settings::Instance().GetCopy();
     std::wstring measureText = m_item->text;
     if (!s.showTashkeel) {
         measureText = ds::StripArabicTashkeel(measureText);
@@ -499,7 +499,7 @@ std::vector<PopupWindow::MonitorInfo> PopupWindow::EnumerateMonitors() {
 
 // ── Position calculation ──────────────────────────────────────────────────────
 HMONITOR PopupWindow::GetTargetMonitor() {
-    auto& s = Settings::Instance().Get();
+    auto s = Settings::Instance().GetCopy();
     auto monitors = EnumerateMonitors();
     if (monitors.empty()) {
         return MonitorFromWindow(nullptr, MONITOR_DEFAULTTOPRIMARY);
@@ -531,7 +531,7 @@ HMONITOR PopupWindow::GetTargetMonitor() {
 
 RECT PopupWindow::CalculatePositionForWorkArea(int w, int h, const RECT& work) {
     int margin = (int)(ds::Dims::PopupMargin * m_dpiScale);
-    auto& s = Settings::Instance().Get();
+    auto s = Settings::Instance().GetCopy();
 
     int x, y;
     int pw = work.right  - work.left;
@@ -577,7 +577,7 @@ void PopupWindow::StartEnterAnim() {
     m_animT = 0.f;
     m_animStart = GetTickCount();
 
-    auto& s = Settings::Instance().Get();
+    auto s = Settings::Instance().GetCopy();
     float speedMult = 1.0f;
     if (s.animationSpeed == AnimationSpeed::Cinematic) speedMult = 1.35f;
     else if (s.animationSpeed == AnimationSpeed::Snappy) speedMult = 0.65f;
@@ -605,7 +605,7 @@ void PopupWindow::StartExitAnim() {
     m_animT = 0.f;
     m_animStart = GetTickCount();
 
-    auto& s = Settings::Instance().Get();
+    auto s = Settings::Instance().GetCopy();
     float speedMult = 1.0f;
     if (s.animationSpeed == AnimationSpeed::Cinematic) speedMult = 1.35f;
     else if (s.animationSpeed == AnimationSpeed::Snappy) speedMult = 0.65f;
@@ -615,7 +615,7 @@ void PopupWindow::StartExitAnim() {
 }
 
 void PopupWindow::SetupAutoDismiss() {
-    int durationMs = Settings::Instance().Get().popupDurationSec * 1000;
+    int durationMs = Settings::Instance().GetCopy().popupDurationSec * 1000;
     SetTimer(m_hwnd, TIMER_POPUP_AUTODISMISS, durationMs, nullptr);
 }
 
@@ -630,7 +630,7 @@ void PopupWindow::Render(float animProgress) {
     bool entering = (m_state == PopupAnimState::Entering);
     bool exiting  = (m_state == PopupAnimState::Closing);
 
-    const auto& s = Settings::Instance().Get();
+    const auto s = Settings::Instance().GetCopy();
     bool animEnabled = s.animationEnabled;
 
     float alpha = 1.0f;
@@ -890,7 +890,7 @@ void PopupWindow::UpdateLayered(float alpha, float slideOffsetX, float slideOffs
     }
 
     // Synchronize layered update across all connected monitors
-    if (Settings::Instance().Get().popupMonitor == PopupMonitor::All) {
+    if (Settings::Instance().GetCopy().popupMonitor == PopupMonitor::All) {
         for (size_t i = 0; i < m_secondaryPopups.size(); ++i) {
             const auto& sec = m_secondaryPopups[i];
             if (sec.hwnd && IsWindow(sec.hwnd)) {
@@ -914,7 +914,7 @@ void PopupWindow::UpdateLayered(float alpha, float slideOffsetX, float slideOffs
 void PopupWindow::DrawBackground(ID2D1RenderTarget* rt, float alpha, float sweepT) {
     if (!rt) return;
 
-    const auto& s = Settings::Instance().Get();
+    const auto s = Settings::Instance().GetCopy();
     float r = ds::Dims::PopupRadius * m_dpiScale;
     if (s.popupCorner == PopupCornerStyle::Squircle) {
         r = 8.f * m_dpiScale;
@@ -1098,7 +1098,7 @@ ID2D1Bitmap* PopupWindow::GetEffectiveLogo() const {
     if (ds::Accent::IsAppPaused()) {
         return m_logoDormantBitmap;
     }
-    int idx = std::clamp((int)Settings::Instance().Get().colorTheme, 0, 5);
+    int idx = std::clamp((int)Settings::Instance().GetCopy().colorTheme, 0, 5);
     return m_logoBitmaps[idx] ? m_logoBitmaps[idx] : m_logoBitmaps[0];
 }
 
@@ -1127,7 +1127,7 @@ void PopupWindow::DrawContent(ID2D1RenderTarget* rt, float alpha) {
     rt->CreateSolidColorBrush(textColor, &textBrush);
     if (!textBrush) return;
 
-    const auto& s = Settings::Instance().Get();
+    const auto s = Settings::Instance().GetCopy();
     std::wstring displayText = m_item->text;
     if (!s.showTashkeel) {
         displayText = ds::StripArabicTashkeel(displayText);

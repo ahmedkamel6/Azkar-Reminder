@@ -107,7 +107,7 @@ void AudioEngine::GenerateDefaultWav() {
 
     IMFSourceReader* pReader = nullptr;
     
-    auto preset = Settings::Instance().Get().soundPreset;
+    auto preset = Settings::Instance().GetCopy().soundPreset;
 
     // Procedural synthesis for built-in acoustic presets (Zero disk dependency)
     if (preset == SoundPreset::WaterDrop || preset == SoundPreset::AmbientEcho || preset == SoundPreset::WoodTap) {
@@ -158,7 +158,7 @@ void AudioEngine::GenerateDefaultWav() {
     }
 
     // 1. Try custom user sound path if configured and preset is Custom
-    std::wstring customPath = Settings::Instance().Get().customSoundPath;
+    std::wstring customPath = Settings::Instance().GetCopy().customSoundPath;
     if (preset == SoundPreset::Custom && !customPath.empty() && std::filesystem::exists(customPath)) {
         hr = MFCreateSourceReaderFromURL(customPath.c_str(), nullptr, &pReader);
         if (SUCCEEDED(hr) && pReader) {
@@ -269,7 +269,7 @@ void AudioEngine::PlayReminder(float volumeOverride) {
         return;
     }
 
-    auto& s = Settings::Instance().Get();
+    auto s = Settings::Instance().GetCopy();
     if (!s.soundEnabled && volumeOverride < 0.0f) return;
 
     // Ensure playback isn't stacking out of control

@@ -1,37 +1,38 @@
-# Privacy Policy for Azkar Reminder (سياسة الخصوصية)
+# سياسة الخصوصية | Privacy policy
 
-**Last updated:** October 2026
-
-## English
-**Azkar Reminder** is committed to protecting your privacy. This application is designed to be completely private, offline, and transparent.
-
-### 1. Data Collection and Usage
-- **No Personal Data Collected:** Azkar Reminder does not collect, transmit, store, or share any personally identifiable information (PII).
-- **100% Offline Operation:** The application operates entirely locally on your Windows device. It does not connect to external servers, track user behavior, or use telemetry services.
-- **Local Storage:** All user configurations, custom dhikr entries, and reminder history are stored locally on your device in your local AppData directory (`%LOCALAPPDATA%\Azkar Reminder`) inside a local SQLite database and JSON files. This data never leaves your computer.
-- **No Ads & No Analytics:** The application contains zero advertisements, zero analytics trackers, and zero third-party software development kits (SDKs).
-
-### 2. Permissions
-- **Run at Startup:** Optional capability to automatically start the background reminder scheduler when Windows boots, configurable directly in Settings.
-- **Audio Output:** Used solely to play user-configured reminder audio notifications locally through Windows Media Foundation and XAudio2.
-
-### 3. Contact & Support
-If you have questions or feedback regarding this Privacy Policy, please contact the developer via the GitHub repository or application support page.
-
----
+آخر تحديث: 15 أكتوبر 2026. تنطبق هذه الوثيقة على المصدر الحالي للإصدار التجريبي 1.2.5.
 
 ## العربية
-يلتزم تطبيق **Azkar Reminder (مذكّر الأذكار)** بحماية خصوصيتك التامة. تم تصميم هذا التطبيق ليكون تطبيقاً محلياً، آمناً، ويعمل بدون إنترنت بالكامل.
 
-### 1. جمع واستخدام البيانات
-- **لا يتم جمع أي بيانات شخصية:** التطبيق لا يجمع ولا يرسل ولا يخزن أي بيانات تعريفية أو شخصية للمستخدم نهائياً.
-- **عمل محلي 100% بدون إنترنت:** يعمل التطبيق بالكامل على جهازك بنظام Windows دون الاتصال بأي خوادم خارجية، ولا يقوم بتتبع سلوك الاستخدام أو استخدام أي أدوات قياس (Telemetry).
-- **التخزين المحلي:** كافة تفضيلات المستخدم، والأذكار المخصصة، وسجل التذكيرات تُحفظ محلياً فقط على جهازك في مجلد البيانات المحلي (`AppData`) عبر قاعدة بيانات SQLite محلية. لا تخرج هذه البيانات من جهازك أبداً.
-- **خالٍ من الإعلانات والتتبع:** التطبيق خالٍ تماماً من الإعلانات وبرمجيات التتبع وأي مكتبات خارجية لأطراف ثالثة.
+يعمل التذكير والجدولة والصوت دون اتصال بالإنترنت. يحفظ التطبيق الإعدادات والمكتبة المخصصة وسجل عرض التذكيرات محليًا في ملفات JSON وقاعدة SQLite. لا يرسل الكود الحالي هذه البيانات إلى خدمة خارجية، ولا يحتوي خدمة تتبع أو إعلانات.
 
-### 2. الصلاحيات
-- **التشغيل مع بدء الويندوز:** ميزة اختيارية لتشغيل مؤقت التذكيرات تلقائياً عند فتح الجهاز، ويمكن تفعيلها أو إلغاؤها من الإعدادات.
-- **الصوت:** تُستخدم لتشغيل التنبيهات الصوتية المختارة محلياً عند موعد الذكر.
+عند اختيار فحص التحديثات في واجهة Windows، يفتح التطبيق صفحة إصدارات المشروع على GitHub في المتصفح الافتراضي. الاتصال عندئذ من المتصفح، وقد يتلقى GitHub بيانات الاتصال المعتادة. واجهة Qt لا تحتوي فحص تحديثات حاليًا.
 
-### 3. التواصل والدعم
-لأي استفسارات بخصوص سياسة الخصوصية، يرجى التواصل عبر صفحة المشروع على GitHub أو عبر صفحة الدعم الرسمية.
+مسارات التخزين:
+
+| النظام | الإعدادات والبيانات |
+|---|---|
+| Windows | `%LOCALAPPDATA%\Azkar Reminder` |
+| Windows MSIX | قد تعزل Windows الملفات في `%LOCALAPPDATA%\Packages\<PackageFamilyName>\LocalCache\Local\Azkar Reminder` |
+| macOS | `~/Library/Application Support/Azkar Reminder`؛ السجلات في `~/Library/Logs/Azkar Reminder` |
+| Linux | `$XDG_CONFIG_HOME/azkar-reminder` و`$XDG_DATA_HOME/azkar-reminder`، أو `~/.config/azkar-reminder` و`~/.local/share/azkar-reminder` عند عدم تعيينهما |
+
+نسخة MSIX قد تقرأ ملفات الإصدار غير المحزم أيضًا عبر العرض المدمج لمجلد AppData. إزالة حزمة MSIX تحذف بياناتها الخاصة؛ صدّر المكتبة المطلوبة قبل الإزالة. راجع [شرح Microsoft لعزل التطبيقات المحزمة](https://learn.microsoft.com/en-us/windows/msix/desktop/desktop-to-uwp-behind-the-scenes).
+
+تحتوي السجلات على أخطاء التشغيل وبعض مسارات الملفات. تُستخدم هوية تثبيت محلية في الذاكرة عند التحميل؛ لا يرسلها الكود الحالي إلى خادم. صدّر المكتبة إلى المكان الذي تختاره عند طلب نسخة احتياطية، وتحقق من ملفات السجل قبل مشاركتها للدعم.
+
+التشغيل التلقائي يضيف سجلًا لحساب المستخدم: HKCU Run على Windows، ملف autostart على Linux، أو LaunchAgent على macOS. يمكن تعطيله من الإعدادات. يستخدم الصوت جهاز الإخراج المحلي. يعتمد كشف ملء الشاشة على بيانات نوافذ النظام في Windows/X11/macOS؛ لا يدعم كشف ملء الشاشة العام في Wayland. إشعارات Wayland تمر عبر خدمة إشعارات سطح المكتب.
+
+للدعم، استخدم صفحة [المشروع](https://github.com/ahmedkamel6/Azkar-Reminder). لا يوجد حساب أو مزامنة سحابية داخل التطبيق الحالي.
+
+## English
+
+Scheduling, reminder content and audio work without an internet connection. Settings, custom content and delivery history are stored locally as JSON and SQLite files at the paths above. The current source does not transmit those records to an external service and contains no telemetry service or advertising.
+
+MSIX can redirect new AppData files into a private package location while allowing reads from an existing unpackaged installation. Windows removes private package data when the package is uninstalled. Export any library you want to retain before removal.
+
+A user-requested Windows update check opens the project's GitHub releases page in the default browser. That browser makes the network request; GitHub may receive ordinary connection data. The Qt frontend currently has no update checker.
+
+Logs contain runtime errors and some file paths. A local installation identifier is generated in memory during settings loading; the current code does not send it to a server. Export writes a library backup to the user-selected path. Inspect logs before sharing them for support.
+
+Optional startup registration modifies the current user's startup configuration. Audio uses local output devices. Fullscreen checks inspect system window information where supported; general Wayland fullscreen detection is unavailable. Wayland reminders use the desktop notification service. There is no application account or cloud synchronization.

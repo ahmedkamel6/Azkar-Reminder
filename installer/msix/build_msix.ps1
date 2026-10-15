@@ -1,134 +1,85 @@
-# build_msix.ps1 - Builds the official MSIX package for Microsoft Store & Windows 10/11
 [CmdletBinding()]
-param (
-    [string]$Version = "1.2.4",
-    [string]$Publisher = "CN=BD257909-6037-4C23-A6F3-A71B4BD2AF69",
-    [string]$PublisherDisplayName = "Ahmedkamel",
-    [string]$PackageName = "15145Ahmedkamel.AzkarReminder",
-    [switch]$SignForLocalTest = $true
+param(
+    [string]$Version,
+    [string]$BuildDirectory,
+    [string]$OutputDirectory,
+    [string]$Publisher,
+    [string]$PublisherDisplayName,
+    [string]$PackageName,
+    [switch]$SignForLocalTest,
+    [string]$CertificateThumbprint
 )
 
-$ErrorActionPreference = "Stop"
-
-$root = Resolve-Path (Join-Path $PSScriptRoot "..\..")
-$msixDir = $PSScriptRoot
-$stagingDir = Join-Path $root "build\msix_staging"
-$outputDir = Join-Path $root "release"
-$outputMsix = Join-Path $outputDir "AzkarReminder-$Version.msix"
-$cerPath = Join-Path $outputDir "AzkarReminder-DeveloperCert.cer"
-
-Write-Host "==========================================================" -ForegroundColor Cyan
-Write-Host "   Azkar Reminder - Microsoft Store (MSIX) Package Builder" -ForegroundColor Cyan
-Write-Host "   Version: $Version" -ForegroundColor Cyan
-Write-Host "==========================================================" -ForegroundColor Cyan
-
-# 1. Locate Windows SDK Tools
-$makeAppx = (Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\makeappx.exe" -ErrorAction SilentlyContinue | Select-Object -First 1).FullName
-$signtool = (Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe" -ErrorAction SilentlyContinue | Select-Object -First 1).FullName
-
-if (!$makeAppx) {
-    throw "makeappx.exe not found in Windows SDK"
+$ErrorActionPreference = 'Stop'
+$projectRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..')).Path
+if (!$Version) {
+    $projectText = Get-Content -LiteralPath (Join-Path $projectRoot 'CMakeLists.txt') -Raw
+    if ($projectText -notmatch 'project\(DhikrReminder VERSION ([0-9]+\.[0-9]+\.[0-9]+)') { throw 'CMake project version not found.' }
+    $Version = $Matches[1]
 }
-Write-Host "[1/6] Found makeappx.exe: $makeAppx" -ForegroundColor Green
+if ($Version -notmatch '^\d+\.\d+\.\d+$') { throw 'Version must have three numeric components.' }
+if (!$BuildDirectory) { $BuildDirectory = Join-Path $projectRoot 'build' }
+if (!$OutputDirectory) { $OutputDirectory = Join-Path $projectRoot 'release' }
+$BuildDirectory = [IO.Path]::GetFullPath($BuildDirectory)
+$OutputDirectory = [IO.Path]::GetFullPath($OutputDirectory)
 
-# 2. Check compiled binary
-$exeSource = Join-Path $root "build\bin\Release\AzkarReminder.exe"
-if (!(Test-Path $exeSource)) {
-    Write-Host "Release binary not found. Building with CMake..." -ForegroundColor Yellow
-    & cmake --build (Join-Path $root "build") --config Release
-    if (!(Test-Path $exeSource)) {
-        throw "Failed to find or build $exeSource"
+function Invoke-Checked {
+    param([string]$Tool, [string[]]$Arguments)
+    & $Tool @Arguments
+    if ($LASTEXITCODE -ne 0) { throw "$Tool failed with exit code $LASTEXITCODE" }
+}
+
+$makeAppx = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\makeappx.exe" -ErrorAction SilentlyContinue |
+    Sort-Object FullName -Descending | Select-Object -First 1 -ExpandProperty FullName
+if (!$makeAppx) { throw 'Install the Windows SDK: makeappx.exe was not found.' }
+$cmakeCommand = Get-Command cmake -ErrorAction SilentlyContinue
+$cmakeTool = if ($cmakeCommand) { $cmakeCommand.Source } else { $null }
+if (!$cmakeTool) {
+    $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+    if (Test-Path -LiteralPath $vswhere) {
+        $cmakeTool = & $vswhere -latest -products '*' -find 'Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe' | Select-Object -First 1
     }
 }
-Write-Host "[2/6] Executable verified: $exeSource" -ForegroundColor Green
-
-# 3. Ensure assets exist
-$assetsDir = Join-Path $msixDir "Assets"
-if (!(Test-Path (Join-Path $assetsDir "StoreLogo.png"))) {
-    Write-Host "Generating visual assets..." -ForegroundColor Yellow
-    & powershell -ExecutionPolicy Bypass -File (Join-Path $msixDir "create_assets.ps1")
+if (!$cmakeTool) { throw 'Install CMake or Visual Studio CMake tools.' }
+if (!(Test-Path -LiteralPath (Join-Path $BuildDirectory 'CMakeCache.txt'))) {
+    Invoke-Checked $cmakeTool @('-S', $projectRoot, '-B', $BuildDirectory, '-A', 'x64', '-DBUILD_QT_APP=OFF')
 }
-Write-Host "[3/6] Visual assets verified in $assetsDir" -ForegroundColor Green
+Invoke-Checked $cmakeTool @('--build', $BuildDirectory, '--config', 'Release', '--parallel', '4')
+$executable = Join-Path $BuildDirectory 'bin\Release\AzkarReminder.exe'
+if (!(Test-Path -LiteralPath $executable)) { throw "Release executable not found: $executable" }
+$binaryVersion = [Diagnostics.FileVersionInfo]::GetVersionInfo($executable).ProductVersion
+if ([version]$binaryVersion -ne [version]"$Version.0") { throw "Binary version $binaryVersion does not match requested package version $Version." }
 
-# 4. Prepare Staging Directory
-Write-Host "[4/6] Preparing MSIX staging directory..." -ForegroundColor Yellow
-if (Test-Path $stagingDir) {
-    Remove-Item -Recurse -Force $stagingDir
-}
-New-Item -ItemType Directory -Path $stagingDir -Force | Out-Null
-New-Item -ItemType Directory -Path (Join-Path $stagingDir "audio") -Force | Out-Null
-New-Item -ItemType Directory -Path (Join-Path $stagingDir "Assets") -Force | Out-Null
-New-Item -ItemType Directory -Path $outputDir -Force | Out-Null
-
-Copy-Item $exeSource -Destination (Join-Path $stagingDir "AzkarReminder.exe")
-Copy-Item (Join-Path $root "assets\audio\*") -Destination (Join-Path $stagingDir "audio") -Recurse -Force
-Copy-Item (Join-Path $assetsDir "*") -Destination (Join-Path $stagingDir "Assets") -Recurse -Force
-if (Test-Path (Join-Path $root "assets\content.md")) {
-    Copy-Item (Join-Path $root "assets\content.md") -Destination (Join-Path $stagingDir "content.md")
-}
-
-# Update version & identity in AppxManifest.xml
-[xml]$manifest = Get-Content (Join-Path $msixDir "AppxManifest.xml")
+[xml]$manifest = [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'AppxManifest.xml'))
 $manifest.Package.Identity.Version = "$Version.0"
-$manifest.Package.Identity.Publisher = $Publisher
-$manifest.Package.Identity.Name = $PackageName
-$manifest.Package.Properties.PublisherDisplayName = $PublisherDisplayName
-$manifest.Save((Join-Path $stagingDir "AppxManifest.xml"))
-
-# 5. Pack MSIX with makeappx.exe
-Write-Host "[5/6] Packing MSIX package..." -ForegroundColor Yellow
-if (Test-Path $outputMsix) {
-    Remove-Item -Force $outputMsix
+if ($Publisher) { $manifest.Package.Identity.Publisher = $Publisher }
+if ($PackageName) { $manifest.Package.Identity.Name = $PackageName }
+if ($PublisherDisplayName) { $manifest.Package.Properties.PublisherDisplayName = $PublisherDisplayName }
+$assets = Join-Path $PSScriptRoot 'Assets'
+foreach ($required in @('StoreLogo.png', 'Square150x150Logo.png', 'Square44x44Logo.png', 'Wide310x150Logo.png', 'SmallTile.png', 'LargeTile.png', 'SplashScreen.png')) {
+    if (!(Test-Path -LiteralPath (Join-Path $assets $required))) { throw "Missing package asset: $required" }
 }
-& $makeAppx pack /d $stagingDir /p $outputMsix /o
-if (!(Test-Path $outputMsix)) {
-    throw "makeappx pack failed!"
-}
-Write-Host "MSIX package created: $outputMsix" -ForegroundColor Green
-
-# 6. Sign for Local Testing & Sideloading
-if ($SignForLocalTest -and $signtool) {
-    Write-Host "[6/6] Generating developer test certificate and signing MSIX for local installation..." -ForegroundColor Yellow
-    $certSubject = $Publisher
-    $certStore = "Cert:\CurrentUser\My"
-
-    $cert = Get-ChildItem $certStore | Where-Object { $_.Subject -eq $certSubject } | Select-Object -First 1
-    if (!$cert) {
-        Write-Host "Creating self-signed code signing certificate..." -ForegroundColor Cyan
-        $cert = New-SelfSignedCertificate `
-            -Type Custom `
-            -Subject $certSubject `
-            -DnsName "AzkarReminder" `
-            -KeyUsage DigitalSignature `
-            -FriendlyName "Azkar Reminder Local Developer Certificate" `
-            -CertStoreLocation $certStore `
-            -TextExtension @("2.5.29.37={text}1.3.6.1.5.5.7.3.3")
+New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
+$stage = Join-Path $BuildDirectory ('msix-' + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $stage | Out-Null
+try {
+    Copy-Item -LiteralPath $executable -Destination (Join-Path $stage 'AzkarReminder.exe')
+    Copy-Item -LiteralPath $assets -Destination (Join-Path $stage 'Assets') -Recurse
+    Copy-Item -LiteralPath (Join-Path $projectRoot 'assets\audio') -Destination (Join-Path $stage 'audio') -Recurse
+    Copy-Item -LiteralPath (Join-Path $projectRoot 'assets\licenses') -Destination (Join-Path $stage 'licenses') -Recurse
+    foreach ($notice in @('LICENSE', 'THIRD_PARTY_NOTICES.md')) { Copy-Item -LiteralPath (Join-Path $projectRoot $notice) -Destination $stage }
+    $manifest.Save((Join-Path $stage 'AppxManifest.xml'))
+    $packagePath = Join-Path $OutputDirectory "AzkarReminder-$Version.msix"
+    Invoke-Checked $makeAppx @('pack', '/d', $stage, '/p', $packagePath, '/o')
+    if ($SignForLocalTest) {
+        if (!$CertificateThumbprint) { throw 'Local signing requires -CertificateThumbprint from a certificate with a private key matching the manifest Publisher.' }
+        & (Join-Path $PSScriptRoot 'sign_msix.ps1') -PackagePath $packagePath -CertificateThumbprint $CertificateThumbprint
     }
-
-    Export-Certificate -Cert $cert -FilePath $cerPath -Force | Out-Null
-    Write-Host "Public test certificate exported to: $cerPath" -ForegroundColor Green
-
-    & $signtool sign /fd SHA256 /a /sha1 $cert.Thumbprint $outputMsix
-    Write-Host "MSIX package signed successfully with local developer certificate!" -ForegroundColor Green
+    $digest = (Get-FileHash -LiteralPath $packagePath -Algorithm SHA256).Hash.ToLowerInvariant()
+    [IO.File]::WriteAllText("$packagePath.sha256", "$digest  $([IO.Path]::GetFileName($packagePath))`n", [Text.UTF8Encoding]::new($false))
+    Write-Host "Created $packagePath. Package installation and Store submission still require validation."
+} finally {
+    $resolvedStage = [IO.Path]::GetFullPath($stage)
+    if (!$resolvedStage.StartsWith($BuildDirectory.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'Refusing cleanup outside the build directory.' }
+    Remove-Item -LiteralPath $resolvedStage -Recurse -Force
 }
-
-Remove-Item -Recurse -Force $stagingDir
-
-$fileSizeMb = [Math]::Round((Get-Item $outputMsix).Length / 1MB, 2)
-
-Write-Host "==========================================================" -ForegroundColor Cyan
-Write-Host "MSIX PACKAGE READY FOR MICROSOFT STORE AND WINDOWS 10/11!" -ForegroundColor Green
-Write-Host "File: $outputMsix" -ForegroundColor White
-Write-Host "Size: $fileSizeMb MB" -ForegroundColor White
-Write-Host "==========================================================" -ForegroundColor Cyan
-Write-Host ""
-Write-Host "Microsoft Store submission instructions:" -ForegroundColor Yellow
-Write-Host "1. Login to Microsoft Partner Center: https://partner.microsoft.com/"
-Write-Host "2. Create a new app reservation for Azkar Reminder"
-Write-Host "3. Upload: $outputMsix"
-Write-Host "   (Microsoft Store will inspect, validate, and sign it automatically)"
-Write-Host ""
-Write-Host "Direct local installation:" -ForegroundColor Yellow
-Write-Host "1. Open test certificate: $cerPath"
-Write-Host "2. Click Install Certificate -> Local Machine -> Trusted People"
-Write-Host "3. Double-click $outputMsix to install with 1 click!"

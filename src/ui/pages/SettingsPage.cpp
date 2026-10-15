@@ -417,7 +417,7 @@ void SettingsPage::DrawColorThemeSelector(ID2D1RenderTarget* rt, float x, float 
 void SettingsPage::CommitSettings(bool notifyLanguage) {
     float savedScroll = m_scrollY;
     float savedTarget = m_targetScrollY;
-    Settings::Instance().Update(m_pendingSettings);
+    Settings::Instance().UpdatePreferences(m_pendingSettings);
     Settings::Instance().Save();
     if (notifyLanguage) {
         Localization::Instance().SetLanguage(m_pendingSettings.language);
@@ -928,7 +928,7 @@ bool SettingsPage::OnLButtonDown(int x, int y) {
             m_pressedElement = 99;
             bool languageChanged = (Settings::Instance().GetCopy().language != m_pendingSettings.language);
 
-            Settings::Instance().Update(m_pendingSettings);
+            Settings::Instance().UpdatePreferences(m_pendingSettings);
             Settings::Instance().Save();
             m_hasUnsavedChanges = false;
 
@@ -1499,8 +1499,8 @@ bool SettingsPage::OnLButtonDown(int x, int y) {
         int res = MessageBoxW(Application::Instance().MainWindow(), msg.c_str(), title.c_str(), MB_YESNO | MB_ICONWARNING);
         if (res == IDYES) {
             AppSettings def;
-            def.language = Settings::Instance().Get().language; // preserve language
-            Settings::Instance().Update(def);
+            def.language = Settings::Instance().GetCopy().language; // preserve language
+            Settings::Instance().UpdatePreferences(def);
             Settings::Instance().Save();
             m_pendingSettings = def;
             m_hasUnsavedChanges = false;

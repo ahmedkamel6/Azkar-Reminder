@@ -7,6 +7,13 @@
 #include <QPainter>
 #include <QPixmap>
 #include <QDateTime>
+#include "../../core/Settings.h"
+#ifdef Q_OS_LINUX
+#include <QDBusConnection>
+#include <QDBusMessage>
+#include <QDBusPendingCallWatcher>
+#include <QDBusPendingReply>
+#endif
 
 namespace dhikr::qt {
 
@@ -29,8 +36,37 @@ void TrayController::Show() {
     }
 }
 
+bool TrayController::IsAvailable() const { return QSystemTrayIcon::isSystemTrayAvailable(); }
+
+void TrayController::Retranslate() {
+    auto* previous = m_menu;
+    BuildContextMenu();
+    delete previous;
+    UpdateStatusTooltip();
+}
+
+void TrayController::NotifyReminder(const ContentItem& item, std::function<void(bool)> completed) {
+#ifdef Q_OS_LINUX
+    auto message = QDBusMessage::createMethodCall("org.freedesktop.Notifications", "/org/freedesktop/Notifications", "org.freedesktop.Notifications", "Notify");
+    const auto settings = Settings::Instance().GetCopy();
+    QVariantMap hints;
+    hints.insert("urgency", QVariant::fromValue(static_cast<uchar>(0)));
+    hints.insert("suppress-sound", !settings.soundEnabled);
+    message.setArguments({QString("Azkar Reminder"), QVariant::fromValue(0u), QString("azkar-reminder"),
+        QString::fromStdString(item.category), QString::fromStdWString(item.text).toHtmlEscaped(), QStringList(), hints, settings.popupDurationSec * 1000});
+    auto* watcher = new QDBusPendingCallWatcher(QDBusConnection::sessionBus().asyncCall(message, 1500), this);
+    connect(watcher, &QDBusPendingCallWatcher::finished, this, [completed](QDBusPendingCallWatcher* result) {
+        QDBusPendingReply<uint> reply = *result;
+        completed(!reply.isError());
+        result->deleteLater();
+    });
+#else
+    completed(false);
+#endif
+}
+
 void TrayController::BuildContextMenu() {
-    m_menu = new QMenu();
+    m_menu = new QMenu(m_mainWindow);
     m_menu->setStyleSheet(ThemeManager::Instance().GenerateApplicationStyleSheet());
 
     m_actOpen = m_menu->addAction(QString::fromStdWString(Localization::Instance().Get(L"tray.open", L"فتح الأذكار")),
@@ -107,7 +143,7 @@ void TrayController::OnOpenClicked() {
 }
 
 void TrayController::OnTriggerNowClicked() {
-    Scheduler::Instance().TriggerNow();
+    if (m_mainWindow) m_mainWindow->TriggerPreview();
 }
 
 void TrayController::OnPause15Clicked() {

@@ -58,14 +58,13 @@ HomePage::HomePage() {
         m_tfBadge->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
     }
 
-    m_masterToggle = std::make_shared<ToggleControl>(Settings::Instance().Get().remindersEnabled && !ds::Accent::IsAppPaused());
+    m_masterToggle = std::make_shared<ToggleControl>(Settings::Instance().GetCopy().remindersEnabled && !ds::Accent::IsAppPaused());
     m_masterToggle->OnClick = []() {
-        auto& s = Settings::Instance().Get();
-        s.remindersEnabled = !s.remindersEnabled;
-        if (s.remindersEnabled) {
-            s.paused = false;
-            s.pauseUntilUnix = 0;
-        }
+        Settings::Instance().Modify([](AppSettings& settings) {
+            settings.remindersEnabled = !settings.remindersEnabled;
+        });
+        const auto s = Settings::Instance().GetCopy();
+        if (s.remindersEnabled) Scheduler::Instance().Resume();
         Settings::Instance().Save();
         Scheduler::Instance().Recalculate();
         TrayIcon::Instance().SetPaused(!s.remindersEnabled);
@@ -96,7 +95,7 @@ void HomePage::OnActivated() {
 
 void HomePage::OnSettingsChanged() {
     if (m_masterToggle) {
-        m_masterToggle->SetIsOn(Settings::Instance().Get().remindersEnabled && !ds::Accent::IsAppPaused());
+        m_masterToggle->SetIsOn(Settings::Instance().GetCopy().remindersEnabled && !ds::Accent::IsAppPaused());
     }
     OnActivated();
 }
@@ -231,7 +230,7 @@ void HomePage::DrawStatusBadge(ID2D1RenderTarget* rt, float x, float y, float w)
     m_statusBadgeRect = r;
 
     float rx = badgeH / 2.f;
-    bool isOn = Settings::Instance().Get().remindersEnabled && !ds::Accent::IsAppPaused();
+    bool isOn = Settings::Instance().GetCopy().remindersEnabled && !ds::Accent::IsAppPaused();
     bool isRtl = Localization::Instance().IsRTL();
 
     // Pill background
@@ -415,7 +414,7 @@ void HomePage::DrawTodayGoalCard(ID2D1RenderTarget* rt, const D2D1_RECT_F& r, bo
     bool isRtl = Localization::Instance().IsRTL();
 
     int delivered = m_todayDelivered;
-    auto& ds_ref = Settings::Instance().Get();
+    auto ds_ref = Settings::Instance().GetCopy();
     int dow = 0;
     { struct tm lt; time_t now = time(nullptr); localtime_s(&lt, &now); dow = lt.tm_wday; }
     auto& daysch = ds_ref.weeklySchedule[dow];
@@ -795,7 +794,7 @@ void HomePage::DrawProgressTimeline(ID2D1RenderTarget* rt, const D2D1_RECT_F& ar
 
     // Schedule window indicator
     struct tm lt; time_t now = time(nullptr); localtime_s(&lt, &now);
-    auto& s = Settings::Instance().Get();
+    auto s = Settings::Instance().GetCopy();
     int dow = lt.tm_wday;
     auto& ds_ref = s.weeklySchedule[dow];
     int startMin = ds_ref.startHour * 60 + ds_ref.startMin;
