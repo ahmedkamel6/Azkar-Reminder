@@ -151,6 +151,8 @@ struct AppSettings {
     bool          paused            = false;
     int           pauseUntilUnix    = 0;      // 0 = not paused
     long long     lastUpdateCheck   = 0;      // Unix timestamp
+    int           windowWidth       = 0;      // 0 = default MainWindowW
+    int           windowHeight      = 0;      // 0 = default MainWindowH
 
     // Update checker — persisted so we can show the prompt after restart
     std::wstring  pendingUpdateVersion = L""; // e.g. L"1.1.0", empty = no pending

@@ -98,12 +98,23 @@ SettingsPage::~SettingsPage() {
     if (m_brush)         { m_brush->Release();         m_brush         = nullptr; }
 }
 
-void SettingsPage::DrawSectionHeader(ID2D1RenderTarget* rt, float x, float& y, float w, const wchar_t* locKey, const wchar_t* iconGlyph) {
+void SettingsPage::DrawSectionHeader(ID2D1RenderTarget* rt, float x, float& y, float w, const wchar_t* locKey, const wchar_t* iconGlyph, float bodyH) {
     if (!m_brush || !m_tfSection) return;
 
-    // Subtle divider line before section (except the first one)
-    m_brush->SetColor(ds::BorderSubtle());
-    rt->DrawLine(D2D1::Point2F(x, y), D2D1::Point2F(x + w, y), m_brush, 1.f);
+    if (bodyH > 0.f) {
+        float cardPadX = 12.f * m_dpiScale;
+        float cardTop  = y + 2.f * m_dpiScale;
+        float cardBot  = y + 46.f * m_dpiScale + bodyH - 2.f * m_dpiScale;
+        D2D1_RECT_F cardR = D2D1::RectF(x - cardPadX, cardTop, x + w + cardPadX, cardBot);
+        if (cardR.bottom >= m_contentY - 20.f && cardR.top <= m_contentY + m_viewportH + 20.f) {
+            float cr = ds::Dims::CardRadius * m_dpiScale;
+            m_brush->SetColor(ds::Rgba(0x13, 0x19, 0x14, 0.56f));
+            rt->FillRoundedRectangle(D2D1::RoundedRect(cardR, cr, cr), m_brush);
+            m_brush->SetColor(ds::BorderSubtle());
+            rt->DrawRoundedRectangle(D2D1::RoundedRect(cardR, cr, cr), m_brush, 1.f);
+        }
+    }
+
     y += 14.f * m_dpiScale;
 
     std::wstring title = Localization::Instance().Get(locKey);
@@ -495,7 +506,7 @@ void SettingsPage::Draw(ID2D1RenderTarget* rt, const D2D1_RECT_F& bounds) {
     // ══════════════════════════════════════════════════════════════════════════
     // Section 1: General (الإعدادات العامة)
     // ══════════════════════════════════════════════════════════════════════════
-    DrawSectionHeader(rt, x, curY, w, L"settings.general", ds::Icon::Settings);
+    DrawSectionHeader(rt, x, curY, w, L"settings.general", ds::Icon::Settings, 3.f * rowH);
 
     // Language
     DrawLabel(rt, x, curY + 6*m_dpiScale, Localization::Instance().Get(L"settings.language").c_str(), fieldW);
@@ -519,7 +530,8 @@ void SettingsPage::Draw(ID2D1RenderTarget* rt, const D2D1_RECT_F& bounds) {
     // ══════════════════════════════════════════════════════════════════════════
     // Section 2: Popup & Display (النافذة المنبثقة والشاشات)
     // ══════════════════════════════════════════════════════════════════════════
-    DrawSectionHeader(rt, x, curY, w, L"settings.popup", ds::Icon::Monitor);
+    float popupBodyH = 7.f * rowH + 28.f * m_dpiScale + (m_pendingSettings.animationEnabled ? 2.f * rowH : 0.f);
+    DrawSectionHeader(rt, x, curY, w, L"settings.popup", ds::Icon::Monitor, popupBodyH);
 
     // Multi-Monitor Target Selector
     if (m_cachedMonitors.empty()) {
@@ -647,7 +659,7 @@ void SettingsPage::Draw(ID2D1RenderTarget* rt, const D2D1_RECT_F& bounds) {
     // ══════════════════════════════════════════════════════════════════════════
     // Section 3: Typography & Content (الخط ومحتوى الذكر)
     // ══════════════════════════════════════════════════════════════════════════
-    DrawSectionHeader(rt, x, curY, w, L"settings.typography_section", ds::Icon::Schedule);
+    DrawSectionHeader(rt, x, curY, w, L"settings.typography_section", ds::Icon::Schedule, 3.f * rowH);
 
     // Font Size
     DrawLabel(rt, x, curY + 6*m_dpiScale, Localization::Instance().Get(L"settings.font_size").c_str(), fieldW);
@@ -671,7 +683,8 @@ void SettingsPage::Draw(ID2D1RenderTarget* rt, const D2D1_RECT_F& bounds) {
     // ══════════════════════════════════════════════════════════════════════════
     // Section 4: Sound (الصوت)
     // ══════════════════════════════════════════════════════════════════════════
-    DrawSectionHeader(rt, x, curY, w, L"settings.sound", ds::Icon::Volume);
+    float soundBodyH = 4.f * rowH + (m_pendingSettings.soundPreset == SoundPreset::Custom ? (rowH + 6.f * m_dpiScale) : 0.f);
+    DrawSectionHeader(rt, x, curY, w, L"settings.sound", ds::Icon::Volume, soundBodyH);
 
     // Enable Sound
     DrawLabel(rt, x, curY + 4*m_dpiScale, Localization::Instance().Get(L"settings.enable_sound").c_str(), togW);
@@ -779,7 +792,8 @@ void SettingsPage::Draw(ID2D1RenderTarget* rt, const D2D1_RECT_F& bounds) {
     // ══════════════════════════════════════════════════════════════════════════
     // Section 4: System (النظام)
     // ══════════════════════════════════════════════════════════════════════════
-    DrawSectionHeader(rt, x, curY, w, L"settings.system", ds::Icon::System);
+    float sysBodyH = 5.f * rowH + (m_pendingSettings.suppressDuringFullscreen ? rowH : 0.f);
+    DrawSectionHeader(rt, x, curY, w, L"settings.system", ds::Icon::System, sysBodyH);
 
     // Full-screen distraction suppression toggle
     DrawLabel(rt, x, curY + 4*m_dpiScale, Localization::Instance().Get(L"settings.fullscreen_suppression").c_str(), togW);
@@ -984,7 +998,7 @@ bool SettingsPage::OnLButtonDown(int x, int y) {
     if (x >= langX && x <= langX + fwPx && vy >= curY && vy <= curY + fh) {
         float ctrlVisualY = curY - m_scrollY;
         POINT pt{ (LONG)langX, (LONG)(ctrlVisualY + fh + 2.f * m_dpiScale) };
-        ClientToScreen(Application::Instance().MainWindow(), &pt);
+        MainWindow::Instance().VirtualClientToScreen(pt);
 
         std::vector<DropdownItem> items = {
             { 1, L"System Default", m_pendingSettings.language == L"system" },
@@ -1044,7 +1058,7 @@ bool SettingsPage::OnLButtonDown(int x, int y) {
     if (x >= mfX && x <= mfX + mfwPx && vy >= curY && vy <= curY + fh) {
         float ctrlVisualY = curY - m_scrollY;
         POINT pt{ (LONG)mfX, (LONG)(ctrlVisualY + fh + 2.f * m_dpiScale) };
-        ClientToScreen(Application::Instance().MainWindow(), &pt);
+        MainWindow::Instance().VirtualClientToScreen(pt);
 
         auto monitors = PopupWindow::EnumerateMonitors();
         std::vector<DropdownItem> items;
@@ -1099,7 +1113,7 @@ bool SettingsPage::OnLButtonDown(int x, int y) {
     if (x >= durX && x <= durX + fwPx && vy >= curY && vy <= curY + fh) {
         float ctrlVisualY = curY - m_scrollY;
         POINT pt{ (LONG)durX, (LONG)(ctrlVisualY + fh + 2.f * m_dpiScale) };
-        ClientToScreen(Application::Instance().MainWindow(), &pt);
+        MainWindow::Instance().VirtualClientToScreen(pt);
 
         std::vector<DropdownItem> items;
         int durations[] = { 2, 3, 5, 7, 10, 15 };
@@ -1124,7 +1138,7 @@ bool SettingsPage::OnLButtonDown(int x, int y) {
     if (x >= surfX && x <= surfX + fwPx && vy >= curY && vy <= curY + fh) {
         float ctrlVisualY = curY - m_scrollY;
         POINT pt{ (LONG)surfX, (LONG)(ctrlVisualY + fh + 2.f * m_dpiScale) };
-        ClientToScreen(Application::Instance().MainWindow(), &pt);
+        MainWindow::Instance().VirtualClientToScreen(pt);
 
         std::vector<DropdownItem> items = {
             { 0, Localization::Instance().Get(L"surface.frosted"),  m_pendingSettings.popupSurface == PopupSurfaceStyle::FrostedAcrylic },
@@ -1148,7 +1162,7 @@ bool SettingsPage::OnLButtonDown(int x, int y) {
     if (x >= cornX && x <= cornX + fwPx && vy >= curY && vy <= curY + fh) {
         float ctrlVisualY = curY - m_scrollY;
         POINT pt{ (LONG)cornX, (LONG)(ctrlVisualY + fh + 2.f * m_dpiScale) };
-        ClientToScreen(Application::Instance().MainWindow(), &pt);
+        MainWindow::Instance().VirtualClientToScreen(pt);
 
         std::vector<DropdownItem> items = {
             { 0, Localization::Instance().Get(L"corner.rounded"),  m_pendingSettings.popupCorner == PopupCornerStyle::Rounded },
@@ -1206,7 +1220,7 @@ bool SettingsPage::OnLButtonDown(int x, int y) {
         if (x >= dropX && x <= dropX + afwPx && vy >= curY && vy <= curY + fh) {
             float ctrlVisualY = curY - m_scrollY;
             POINT pt{ (LONG)dropX, (LONG)(ctrlVisualY + fh + 2.f * m_dpiScale) };
-            ClientToScreen(Application::Instance().MainWindow(), &pt);
+            MainWindow::Instance().VirtualClientToScreen(pt);
 
             std::vector<DropdownItem> items = {
                 { 0, Localization::Instance().Get(L"anim.classic"),          m_pendingSettings.popupAnimation == PopupAnimation::Classic },
@@ -1245,7 +1259,7 @@ bool SettingsPage::OnLButtonDown(int x, int y) {
         if (x >= spX && x <= spX + fwPx && vy >= curY && vy <= curY + fh) {
             float ctrlVisualY = curY - m_scrollY;
             POINT pt{ (LONG)spX, (LONG)(ctrlVisualY + fh + 2.f * m_dpiScale) };
-            ClientToScreen(Application::Instance().MainWindow(), &pt);
+            MainWindow::Instance().VirtualClientToScreen(pt);
 
             std::vector<DropdownItem> items = {
                 { 0, Localization::Instance().Get(L"speed.normal"),    m_pendingSettings.animationSpeed == AnimationSpeed::Normal },
@@ -1274,7 +1288,7 @@ bool SettingsPage::OnLButtonDown(int x, int y) {
     if (x >= fnX && x <= fnX + fwPx && vy >= curY && vy <= curY + fh) {
         float ctrlVisualY = curY - m_scrollY;
         POINT pt{ (LONG)fnX, (LONG)(ctrlVisualY + fh + 2.f * m_dpiScale) };
-        ClientToScreen(Application::Instance().MainWindow(), &pt);
+        MainWindow::Instance().VirtualClientToScreen(pt);
 
         std::vector<DropdownItem> items = {
             { 0, Localization::Instance().Get(L"font.medium"), m_pendingSettings.popupFontSize == PopupFontSize::Medium },
@@ -1328,7 +1342,7 @@ bool SettingsPage::OnLButtonDown(int x, int y) {
     if (x >= prX && x <= prX + fwPx && vy >= curY && vy <= curY + fh) {
         float ctrlVisualY = curY - m_scrollY;
         POINT pt{ (LONG)prX, (LONG)(ctrlVisualY + fh + 2.f * m_dpiScale) };
-        ClientToScreen(Application::Instance().MainWindow(), &pt);
+        MainWindow::Instance().VirtualClientToScreen(pt);
 
         std::vector<DropdownItem> items = {
             { 0, Localization::Instance().Get(L"sound.chime"),   m_pendingSettings.soundPreset == SoundPreset::Chime },
@@ -1467,7 +1481,7 @@ bool SettingsPage::OnLButtonDown(int x, int y) {
         if (x >= ffsX && x <= ffsX + fswPx && vy >= curY && vy <= curY + fh) {
             float ctrlVisualY = curY - m_scrollY;
             POINT pt{ (LONG)ffsX, (LONG)(ctrlVisualY + fh + 2.f * m_dpiScale) };
-            ClientToScreen(Application::Instance().MainWindow(), &pt);
+            MainWindow::Instance().VirtualClientToScreen(pt);
 
             std::vector<DropdownItem> items = {
                 { 0, Localization::Instance().Get(L"settings.fullscreen_queue"), m_pendingSettings.fullscreenSuppressionMode == 0 },

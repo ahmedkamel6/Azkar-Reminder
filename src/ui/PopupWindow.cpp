@@ -397,20 +397,45 @@ void PopupWindow::Show(const ContentItem* item, bool force) {
     float desiredTextH = 0.f;
 
     if (mainFmt && m_dwriteFactory) {
-        IDWriteTextLayout* layout = nullptr;
-        if (SUCCEEDED(m_dwriteFactory->CreateTextLayout(measureText.c_str(), (UINT32)measureText.size(), mainFmt, maxTextW, 2000.f, &layout))) {
-            DWRITE_TEXT_METRICS metrics;
+        // Check line wrapping and widen slightly (up to 3 steps) if the last line leaves a short orphan word
+        float trialW = maxTextW;
+        for (int attempt = 0; attempt < 4; ++attempt) {
+            IDWriteTextLayout* layout = nullptr;
+            if (FAILED(m_dwriteFactory->CreateTextLayout(measureText.c_str(), (UINT32)measureText.size(), mainFmt, trialW, 2000.f, &layout)) || !layout) {
+                break;
+            }
+            DWRITE_TEXT_METRICS metrics{};
             layout->GetMetrics(&metrics);
-            layout->Release();
             desiredTextW = metrics.width;
             desiredTextH = metrics.height;
+
+            bool hasOrphanLastLine = false;
+            if (metrics.lineCount >= 2 && attempt < 3) {
+                std::vector<DWRITE_LINE_METRICS> lines(metrics.lineCount);
+                UINT32 actualLines = 0;
+                if (SUCCEEDED(layout->GetLineMetrics(lines.data(), metrics.lineCount, &actualLines)) && actualLines >= 2) {
+                    const auto& last = lines[actualLines - 1];
+                    UINT32 trimmedLen = last.length - last.trailingWhitespaceLength - last.newlineLength;
+                    if (trimmedLen > 0 && trimmedLen <= 6) {
+                        hasOrphanLastLine = true;
+                    }
+                }
+            }
+            layout->Release();
+
+            if (!hasOrphanLastLine) {
+                maxTextW = trialW;
+                break;
+            }
+            trialW = std::min(trialW + 52.f * m_dpiScale, 740.f * m_dpiScale);
         }
 
         if (s.showSource && m_textFmtSub && !m_item->description.empty()) {
-            if (SUCCEEDED(m_dwriteFactory->CreateTextLayout(m_item->description.c_str(), (UINT32)m_item->description.size(), m_textFmtSub, maxTextW, 2000.f, &layout))) {
-                DWRITE_TEXT_METRICS metrics;
-                layout->GetMetrics(&metrics);
-                layout->Release();
+            IDWriteTextLayout* subLayout = nullptr;
+            if (SUCCEEDED(m_dwriteFactory->CreateTextLayout(m_item->description.c_str(), (UINT32)m_item->description.size(), m_textFmtSub, maxTextW, 2000.f, &subLayout)) && subLayout) {
+                DWRITE_TEXT_METRICS metrics{};
+                subLayout->GetMetrics(&metrics);
+                subLayout->Release();
                 desiredTextW = std::max(desiredTextW, metrics.width);
                 desiredTextH += metrics.height + 4.f * m_dpiScale;
             }
@@ -422,7 +447,7 @@ void PopupWindow::Show(const ContentItem* item, bool force) {
     float finalH = desiredTextH + padY * 2.f;
 
     float minW = 280.f * m_dpiScale;
-    float maxW = 820.f * m_dpiScale;
+    float maxW = 880.f * m_dpiScale;
     float minH = 72.f * m_dpiScale;
     float maxH = 320.f * m_dpiScale;
 

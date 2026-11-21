@@ -56,6 +56,10 @@ public:
     void UpdateAppIcon(ColorTheme themeOverride = (ColorTheme)-1);
     ColorTheme GetTargetTheme() const { return m_targetTheme; }
     float GetDpiScale() const { return m_dpiScale; }
+    float UiZoom() const;
+    float VirtualWidth() const;
+    float VirtualHeight() const;
+    void  VirtualClientToScreen(POINT& pt) const;
 
     ID2D1Bitmap* GetLogoBitmap() const { return m_logoBitmaps[0]; }
     ID2D1Bitmap* GetLogoSmallBitmap() const { return m_logoSmallBitmaps[0]; }

@@ -687,7 +687,7 @@ bool RemindersPage::OnLButtonDown(int x, int y) {
 
         if (x >= chipR.left && x <= chipR.right && y >= chipR.top && y <= chipR.bottom) {
             POINT pt{ (LONG)cx, (LONG)(chipR.bottom + 2.f*m_dpiScale) };
-            ClientToScreen(Application::Instance().MainWindow(), &pt);
+            MainWindow::Instance().VirtualClientToScreen(pt);
 
             if (col == 0) { // Master Start Time
                 TimePickerPopup::Instance().Show(Application::Instance().MainWindow(), pt.x, pt.y,
@@ -764,7 +764,7 @@ bool RemindersPage::OnLButtonDown(int x, int y) {
 
         if (x >= chipR.left && x <= chipR.right && y >= chipR.top && y <= chipR.bottom) {
             POINT pt{ (LONG)cx, (LONG)(chipR.bottom + 2.f*m_dpiScale) };
-            ClientToScreen(Application::Instance().MainWindow(), &pt);
+            MainWindow::Instance().VirtualClientToScreen(pt);
 
             if (col == 0) { // Quiet Hours
                 std::vector<DropdownItem> items = {
@@ -822,7 +822,7 @@ bool RemindersPage::OnLButtonDown(int x, int y) {
         else if (m_hoveredElement >= 10 && m_hoveredElement < 17) {
             int day = m_hoveredElement - 10;
             POINT pt{ x, y + 20 };
-            ClientToScreen(Application::Instance().MainWindow(), &pt);
+            MainWindow::Instance().VirtualClientToScreen(pt);
             TimePickerPopup::Instance().Show(Application::Instance().MainWindow(), pt.x, pt.y,
                 m_pendingSettings.weeklySchedule[day].startHour,
                 m_pendingSettings.weeklySchedule[day].startMin,
@@ -838,7 +838,7 @@ bool RemindersPage::OnLButtonDown(int x, int y) {
         else if (m_hoveredElement >= 20 && m_hoveredElement < 27) {
             int day = m_hoveredElement - 20;
             POINT pt{ x, y + 20 };
-            ClientToScreen(Application::Instance().MainWindow(), &pt);
+            MainWindow::Instance().VirtualClientToScreen(pt);
             TimePickerPopup::Instance().Show(Application::Instance().MainWindow(), pt.x, pt.y,
                 m_pendingSettings.weeklySchedule[day].endHour,
                 m_pendingSettings.weeklySchedule[day].endMin,
@@ -869,7 +869,7 @@ bool RemindersPage::OnLButtonDown(int x, int y) {
             items.push_back({ -1, customOpt, false });
 
             POINT pt{ x, y + 20 };
-            ClientToScreen(Application::Instance().MainWindow(), &pt);
+            MainWindow::Instance().VirtualClientToScreen(pt);
 
             DropdownPopup::Instance().Show(Application::Instance().MainWindow(), pt.x, pt.y, 140.f, items,
                 [this, pt, curFreq, day](int chosenFreq) {

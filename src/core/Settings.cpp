@@ -221,6 +221,8 @@ bool Settings::Load(const std::filesystem::path& appDataPath) {
         if (j.contains("firstLaunch"))   s.firstLaunch = j["firstLaunch"].get<bool>();
         if (j.contains("paused"))        s.paused = j["paused"].get<bool>();
         if (j.contains("pauseUntilUnix")) s.pauseUntilUnix = j["pauseUntilUnix"].get<int>();
+        if (j.contains("windowWidth"))   s.windowWidth  = j["windowWidth"].get<int>();
+        if (j.contains("windowHeight"))  s.windowHeight = j["windowHeight"].get<int>();
 
         LOG_INFO("Settings loaded successfully");
         return true;
@@ -311,6 +313,8 @@ bool Settings::Save() {
         j["firstLaunch"]    = s.firstLaunch;
         j["paused"]         = s.paused;
         j["pauseUntilUnix"] = s.pauseUntilUnix;
+        if (s.windowWidth  > 0) j["windowWidth"]  = s.windowWidth;
+        if (s.windowHeight > 0) j["windowHeight"] = s.windowHeight;
 
         // Atomic write: write to temp file then rename
         auto tmpPath = m_filePath;

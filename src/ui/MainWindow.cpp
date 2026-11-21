@@ -183,12 +183,20 @@ bool MainWindow::CreateWindow_(HINSTANCE hInstance) {
             workTop = mi.rcWork.top;
         }
 
-        // Start at compact utility dimensions (MainWindowW x MainWindowH DPI-scaled)
-        // while still clamping cleanly on smaller monitors and keeping free edge resizing.
-        int targetW = (int)(ds::Dims::MainWindowW * m_dpiScale);
-        int targetH = (int)(ds::Dims::MainWindowH * m_dpiScale);
-        m_width  = std::min(targetW, std::max((int)(ds::Dims::MainWindowMinW * m_dpiScale), workW - 40));
-        m_height = std::min(targetH, std::max((int)(ds::Dims::MainWindowMinH * m_dpiScale), workH - 40));
+        // Start at last saved size (clamped) or compact utility dimensions (MainWindowW x MainWindowH DPI-scaled).
+        const auto saved = Settings::Instance().GetCopy();
+        int minClientW = (int)(ds::Dims::MainWindowMinW * m_dpiScale);
+        int minClientH = (int)(ds::Dims::MainWindowMinH * m_dpiScale);
+        int maxClientW = (int)(1180.f * m_dpiScale);
+        int maxClientH = (int)(820.f  * m_dpiScale);
+
+        int defaultW = (int)(ds::Dims::MainWindowW * m_dpiScale);
+        int defaultH = (int)(ds::Dims::MainWindowH * m_dpiScale);
+        int reqW = (saved.windowWidth  > 0) ? saved.windowWidth  : defaultW;
+        int reqH = (saved.windowHeight > 0) ? saved.windowHeight : defaultH;
+
+        m_width  = std::clamp(reqW, std::min(minClientW, workW - 24), std::min(maxClientW, workW - 24));
+        m_height = std::clamp(reqH, std::min(minClientH, workH - 24), std::min(maxClientH, workH - 24));
 
         RECT rcDpi = { 0, 0, m_width, m_height };
         AdjustWindowRectExForDpi(&rcDpi, style, FALSE, WS_EX_APPWINDOW, dpi ? dpi : 96);
@@ -268,14 +276,14 @@ bool MainWindow::InitD2D() {
         // We still return true so the window is shown; OnPaint has a GDI fallback.
     }
 
-    // Initialize WIC and load master 1024px logos downsampled 1:1 to exact display diameters
-    // (36dp Sidebar, 60dp About Hero) using Fant area-averaging so edges stay anti-aliased and crisp.
+    // Initialize WIC and load master 1024px logos downsampled at max UI zoom (~1.33x)
+    // so both 1.0x and zoomed rendering remain inside the alias-free bilinear range.
     hr = CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&m_wicFactory));
     if (SUCCEEDED(hr) && m_wicFactory && m_renderTarget) {
-        UINT smallSize = (UINT)std::lround(36.f * m_dpiScale);
-        if (smallSize < 36) smallSize = 36;
-        UINT largeSize = (UINT)std::lround(60.f * m_dpiScale);
-        if (largeSize < 60) largeSize = 60;
+        UINT smallSize = (UINT)std::lround(48.f * m_dpiScale);
+        if (smallSize < 48) smallSize = 48;
+        UINT largeSize = (UINT)std::lround(80.f * m_dpiScale);
+        if (largeSize < 80) largeSize = 80;
 
         int masterIds[6] = {
             IDR_LOGO,        // Green
@@ -392,18 +400,46 @@ void MainWindow::NavigateTo(int pageId) {
     InvalidateRect(m_hwnd, nullptr, FALSE);
 }
 
+float MainWindow::UiZoom() const {
+    float baseW = ds::Dims::MainWindowW * m_dpiScale;
+    float baseH = ds::Dims::MainWindowH * m_dpiScale;
+    if (baseW <= 0.f || baseH <= 0.f || m_width <= 0 || m_height <= 0) return 1.0f;
+    float rw = (float)m_width  / baseW;
+    float rh = (float)m_height / baseH;
+    return std::clamp(std::min(rw, rh), 0.88f, 1.35f);
+}
+
+float MainWindow::VirtualWidth() const {
+    return (float)m_width / UiZoom();
+}
+
+float MainWindow::VirtualHeight() const {
+    return (float)m_height / UiZoom();
+}
+
+void MainWindow::VirtualClientToScreen(POINT& pt) const {
+    float z = UiZoom();
+    pt.x = (LONG)std::lround((float)pt.x * z);
+    pt.y = (LONG)std::lround((float)pt.y * z);
+    ClientToScreen(m_hwnd, &pt);
+}
+
 D2D1_RECT_F MainWindow::SidebarRect() const {
     float sw = ds::Dims::SidebarW * m_dpiScale;
+    float vw = VirtualWidth();
+    float vh = VirtualHeight();
     bool isRtl = Localization::Instance().IsRTL();
-    if (isRtl) return D2D1::RectF((float)m_width - sw, 0.f, (float)m_width, (float)m_height);
-    return D2D1::RectF(0.f, 0.f, sw, (float)m_height);
+    if (isRtl) return D2D1::RectF(vw - sw, 0.f, vw, vh);
+    return D2D1::RectF(0.f, 0.f, sw, vh);
 }
 
 D2D1_RECT_F MainWindow::ContentRect() const {
     float sw = ds::Dims::SidebarW * m_dpiScale;
+    float vw = VirtualWidth();
+    float vh = VirtualHeight();
     bool isRtl = Localization::Instance().IsRTL();
     float left  = isRtl ? 0.f : sw;
-    float right = isRtl ? ((float)m_width - sw) : (float)m_width;
+    float right = isRtl ? (vw - sw) : vw;
     float availW = right - left;
     float maxW = 740.f * m_dpiScale;
     if (availW > maxW) {
@@ -411,7 +447,7 @@ D2D1_RECT_F MainWindow::ContentRect() const {
         left  += inset;
         right -= inset;
     }
-    return D2D1::RectF(left, 0.f, right, (float)m_height);
+    return D2D1::RectF(left, 0.f, right, vh);
 }
 
 // ── State ───────────────────────────────────────────────────────────────────
@@ -442,6 +478,10 @@ void MainWindow::OnPaint() {
 
     m_renderTarget->BeginDraw();
 
+    // Scale virtual layout space cleanly when resized so all elements grow proportionally
+    float zoom = UiZoom();
+    m_renderTarget->SetTransform(D2D1::Matrix3x2F::Scale(zoom, zoom));
+
     // Force-clear to solid background
     auto bg = ds::Background();
     m_renderTarget->Clear(bg);
@@ -449,6 +489,8 @@ void MainWindow::OnPaint() {
     DrawBackground(m_renderTarget);
     DrawSidebar(m_renderTarget);
     DrawCurrentPage(m_renderTarget);
+
+    m_renderTarget->SetTransform(D2D1::Matrix3x2F::Identity());
 
     HRESULT hr = m_renderTarget->EndDraw();
     if (hr == D2DERR_RECREATE_TARGET) {
@@ -462,6 +504,9 @@ void MainWindow::OnPaint() {
 void MainWindow::DrawBackground(ID2D1RenderTarget* rt) {
     if (!m_brush || !rt) return;
 
+    float vw = VirtualWidth();
+    float vh = VirtualHeight();
+
     // Subtle atmospheric Aurora canvas gradient
     D2D1_GRADIENT_STOP stops[4];
     stops[0].position = 0.00f; stops[0].color = ds::Aurora::CanvasStop0(); // Top-Right Deep Moss Glow
@@ -474,8 +519,8 @@ void MainWindow::DrawBackground(ID2D1RenderTarget* rt) {
     if (SUCCEEDED(hr) && pStopCol) {
         bool isRtl = Localization::Instance().IsRTL();
         // Top-right to bottom-left gradient flow (or top-left to bottom-right in RTL)
-        D2D1_POINT_2F startPt = isRtl ? D2D1::Point2F(0.0f, 0.0f) : D2D1::Point2F((float)m_width, 0.0f);
-        D2D1_POINT_2F endPt   = isRtl ? D2D1::Point2F((float)m_width, (float)m_height) : D2D1::Point2F(0.0f, (float)m_height);
+        D2D1_POINT_2F startPt = isRtl ? D2D1::Point2F(0.0f, 0.0f) : D2D1::Point2F(vw, 0.0f);
+        D2D1_POINT_2F endPt   = isRtl ? D2D1::Point2F(vw, vh) : D2D1::Point2F(0.0f, vh);
 
         ID2D1LinearGradientBrush* pGradBrush = nullptr;
         hr = rt->CreateLinearGradientBrush(
@@ -483,26 +528,27 @@ void MainWindow::DrawBackground(ID2D1RenderTarget* rt) {
             pStopCol,
             &pGradBrush);
         if (SUCCEEDED(hr) && pGradBrush) {
-            rt->FillRectangle(D2D1::RectF(0.0f, 0.0f, (float)m_width, (float)m_height), pGradBrush);
+            rt->FillRectangle(D2D1::RectF(0.0f, 0.0f, vw, vh), pGradBrush);
             pGradBrush->Release();
         } else {
             m_brush->SetColor(ds::Background());
-            rt->FillRectangle(D2D1::RectF(0.0f, 0.0f, (float)m_width, (float)m_height), m_brush);
+            rt->FillRectangle(D2D1::RectF(0.0f, 0.0f, vw, vh), m_brush);
         }
         pStopCol->Release();
     } else {
         m_brush->SetColor(ds::Background());
-        rt->FillRectangle(D2D1::RectF(0.0f, 0.0f, (float)m_width, (float)m_height), m_brush);
+        rt->FillRectangle(D2D1::RectF(0.0f, 0.0f, vw, vh), m_brush);
     }
 
     if (Settings::Instance().GetCopy().arabesqueOverlay) {
-        ds::Arabesque::DrawLattice(rt, D2D1::RectF(0.0f, 0.0f, (float)m_width, (float)m_height), 0.025f);
+        ds::Arabesque::DrawLattice(rt, D2D1::RectF(0.0f, 0.0f, vw, vh), 0.025f);
     }
 }
 
 void MainWindow::DrawSidebar(ID2D1RenderTarget* rt) {
     if (!m_brush) return;
     auto sr = SidebarRect();
+    float vh = VirtualHeight();
 
     m_brush->SetColor(ds::Sidebar());
     rt->FillRectangle(sr, m_brush);
@@ -512,12 +558,12 @@ void MainWindow::DrawSidebar(ID2D1RenderTarget* rt) {
     if (Localization::Instance().IsRTL()) {
         rt->DrawLine(
             D2D1::Point2F(sr.left, sr.top),
-            D2D1::Point2F(sr.left, (float)m_height),
+            D2D1::Point2F(sr.left, vh),
             m_brush, 1.f * m_dpiScale);
     } else {
         rt->DrawLine(
             D2D1::Point2F(sr.right, sr.top),
-            D2D1::Point2F(sr.right, (float)m_height),
+            D2D1::Point2F(sr.right, vh),
             m_brush, 1.f * m_dpiScale);
     }
 
@@ -678,7 +724,7 @@ void MainWindow::DrawSidebarBottom(ID2D1RenderTarget* rt) {
     if (!m_brush) return;
     auto sr = SidebarRect();
     float pad = ds::Space::L * m_dpiScale;
-    float bottomY = (float)m_height - 40.f * m_dpiScale;
+    float bottomY = VirtualHeight() - 40.f * m_dpiScale;
 
     // Smooth animated 3D coin medallion
     float cx = sr.left + (sr.right - sr.left) / 2.f;
@@ -1014,11 +1060,15 @@ LRESULT MainWindow::OnMouseMove(int x, int y) {
         m_mouseTracking = true;
     }
 
+    float z = UiZoom();
+    int vx = (int)std::lround((float)x / z);
+    int vy = (int)std::lround((float)y / z);
+
     bool needsRepaint = false;
-    if (InputController::Instance().OnMouseMove((float)x, (float)y)) needsRepaint = true;
+    if (InputController::Instance().OnMouseMove((float)vx, (float)vy)) needsRepaint = true;
     
     if (m_activePage >= 0 && m_activePage < kNavItems && m_pages[m_activePage]) {
-        if (m_pages[m_activePage]->OnMouseMove(x, y)) needsRepaint = true;
+        if (m_pages[m_activePage]->OnMouseMove(vx, vy)) needsRepaint = true;
     }
 
     if (needsRepaint) InvalidateRect(m_hwnd, nullptr, FALSE);
@@ -1054,13 +1104,16 @@ LRESULT MainWindow::OnMouseWheel(int delta) {
 }
 
 LRESULT MainWindow::OnLButtonDown(int x, int y) {
-    LOG_INFO("[INPUT] WM_LBUTTONDOWN hwnd=" + std::to_string((uintptr_t)m_hwnd) + " x=" + std::to_string(x) + " y=" + std::to_string(y));
+    float z = UiZoom();
+    int vx = (int)std::lround((float)x / z);
+    int vy = (int)std::lround((float)y / z);
+    LOG_INFO("[INPUT] WM_LBUTTONDOWN hwnd=" + std::to_string((uintptr_t)m_hwnd) + " x=" + std::to_string(vx) + " y=" + std::to_string(vy));
 
     bool needsRepaint = false;
-    if (InputController::Instance().OnLButtonDown((float)x, (float)y)) needsRepaint = true;
+    if (InputController::Instance().OnLButtonDown((float)vx, (float)vy)) needsRepaint = true;
 
     if (m_activePage >= 0 && m_activePage < kNavItems && m_pages[m_activePage]) {
-        if (m_pages[m_activePage]->OnLButtonDown(x, y)) needsRepaint = true;
+        if (m_pages[m_activePage]->OnLButtonDown(vx, vy)) needsRepaint = true;
     }
 
     if (needsRepaint) InvalidateRect(m_hwnd, nullptr, FALSE);
@@ -1068,11 +1121,15 @@ LRESULT MainWindow::OnLButtonDown(int x, int y) {
 }
 
 LRESULT MainWindow::OnLButtonUp(int x, int y) {
+    float z = UiZoom();
+    int vx = (int)std::lround((float)x / z);
+    int vy = (int)std::lround((float)y / z);
+
     bool needsRepaint = false;
-    if (InputController::Instance().OnLButtonUp((float)x, (float)y)) needsRepaint = true;
+    if (InputController::Instance().OnLButtonUp((float)vx, (float)vy)) needsRepaint = true;
 
     if (m_activePage >= 0 && m_activePage < kNavItems && m_pages[m_activePage]) {
-        if (m_pages[m_activePage]->OnLButtonUp(x, y)) needsRepaint = true;
+        if (m_pages[m_activePage]->OnLButtonUp(vx, vy)) needsRepaint = true;
     }
 
     if (needsRepaint) InvalidateRect(m_hwnd, nullptr, FALSE);
@@ -1086,7 +1143,10 @@ LRESULT MainWindow::OnSetCursor(HWND hwnd, UINT hitTest, UINT message) {
             POINT pt;
             GetCursorPos(&pt);
             ScreenToClient(m_hwnd, &pt);
-            hand = m_pages[m_activePage]->HitTestInteractive(pt.x, pt.y);
+            float z = UiZoom();
+            int vx = (int)std::lround((float)pt.x / z);
+            int vy = (int)std::lround((float)pt.y / z);
+            hand = m_pages[m_activePage]->HitTestInteractive(vx, vy);
         }
         SetCursor(LoadCursorW(nullptr, hand ? IDC_HAND : IDC_ARROW));
         return TRUE;
@@ -1115,13 +1175,54 @@ LRESULT MainWindow::OnTrayCallback(LPARAM lp) {
 }
 
 LRESULT MainWindow::OnGetMinMaxInfo(MINMAXINFO* mmi) {
-    mmi->ptMinTrackSize.x = (LONG)(ds::Dims::MainWindowMinW * m_dpiScale);
-    mmi->ptMinTrackSize.y = (LONG)(ds::Dims::MainWindowMinH * m_dpiScale);
+    DWORD style = m_hwnd ? (DWORD)GetWindowLongW(m_hwnd, GWL_STYLE)
+                         : (WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_THICKFRAME);
+    UINT dpi = m_hwnd ? GetDpiForWindow(m_hwnd) : (UINT)(m_dpiScale * 96.f);
+    if (dpi == 0) dpi = 96;
+    float scale = dpi / 96.f;
+
+    int workW = GetSystemMetricsForDpi(SM_CXSCREEN, dpi);
+    int workH = GetSystemMetricsForDpi(SM_CYSCREEN, dpi);
+    if (m_hwnd) {
+        HMONITOR hMon = MonitorFromWindow(m_hwnd, MONITOR_DEFAULTTONEAREST);
+        MONITORINFO mi{ sizeof(mi) };
+        if (hMon && GetMonitorInfoW(hMon, &mi)) {
+            workW = mi.rcWork.right - mi.rcWork.left;
+            workH = mi.rcWork.bottom - mi.rcWork.top;
+        }
+    }
+
+    RECT rcMin = { 0, 0, (LONG)(ds::Dims::MainWindowMinW * scale), (LONG)(ds::Dims::MainWindowMinH * scale) };
+    AdjustWindowRectExForDpi(&rcMin, style, FALSE, WS_EX_APPWINDOW, dpi);
+    RECT rcMax = { 0, 0, (LONG)(1180.f * scale), (LONG)(820.f * scale) };
+    AdjustWindowRectExForDpi(&rcMax, style, FALSE, WS_EX_APPWINDOW, dpi);
+
+    LONG minW = std::min<LONG>(rcMin.right - rcMin.left, workW);
+    LONG minH = std::min<LONG>(rcMin.bottom - rcMin.top, workH);
+    LONG maxW = std::max<LONG>(minW, std::min<LONG>(rcMax.right - rcMax.left, workW));
+    LONG maxH = std::max<LONG>(minH, std::min<LONG>(rcMax.bottom - rcMax.top, workH));
+
+    mmi->ptMinTrackSize.x = minW;
+    mmi->ptMinTrackSize.y = minH;
+    mmi->ptMaxTrackSize.x = maxW;
+    mmi->ptMaxTrackSize.y = maxH;
     return 0;
+}
+
+static void PersistWindowDimensions(int width, int height) {
+    if (width <= 0 || height <= 0) return;
+    auto s = Settings::Instance().GetCopy();
+    if (s.windowWidth != width || s.windowHeight != height) {
+        s.windowWidth = width;
+        s.windowHeight = height;
+        Settings::Instance().Update(s);
+        Settings::Instance().Save();
+    }
 }
 
 LRESULT MainWindow::OnClose() {
     LOG_INFO("MainWindow::OnClose called");
+    PersistWindowDimensions(m_width, m_height);
     if (!TrayIcon::Instance().IsCreated()) {
         if (!TrayIcon::Instance().Create(m_hwnd, m_hInst)) {
             LOG_WARN("Tray icon not available on close — minimizing window to taskbar");
@@ -1136,6 +1237,7 @@ LRESULT MainWindow::OnClose() {
 
 LRESULT MainWindow::OnDestroy() {
     LOG_INFO("MainWindow::OnDestroy called");
+    PersistWindowDimensions(m_width, m_height);
     KillTimer(m_hwnd, TIMER_FULLSCREEN_RESUME);
     KillTimer(m_hwnd, TIMER_TRAY_RETRY);
     m_pendingFullscreenReminder = nullptr;
@@ -1179,6 +1281,9 @@ LRESULT CALLBACK MainWindow::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
             self->OnPaint();
             return 0;
         case WM_SIZE:             return self->OnSize(LOWORD(lp), HIWORD(lp));
+        case WM_EXITSIZEMOVE:
+            PersistWindowDimensions(self->m_width, self->m_height);
+            return 0;
         case WM_COMMAND:          return self->OnCommand(wp);
         case WM_REMINDER_TRIGGER: return self->OnReminder(wp == 1);
         case WM_SETTINGS_CHANGED: return self->OnSettingsChanged();

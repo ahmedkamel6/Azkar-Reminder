@@ -27,7 +27,7 @@ public:
     void ResetD2D() override { if (m_brush) { m_brush->Release(); m_brush = nullptr; } }
 
 private:
-    void DrawSectionHeader(ID2D1RenderTarget* rt, float x, float& y, float w, const wchar_t* locKey, const wchar_t* icon);
+    void DrawSectionHeader(ID2D1RenderTarget* rt, float x, float& y, float w, const wchar_t* locKey, const wchar_t* icon, float bodyH = 0.f);
     void DrawToggle(ID2D1RenderTarget* rt, float x, float y, bool on, bool hover = false);
     void DrawLabel(ID2D1RenderTarget* rt, float x, float y, const wchar_t* text, float controlReserveW = 200.f);
     void DrawDropdown(ID2D1RenderTarget* rt, const D2D1_RECT_F& r, const wchar_t* val, bool hover = false);
