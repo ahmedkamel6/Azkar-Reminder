@@ -69,7 +69,7 @@ private:
     bool InitD2D();
     void ReleaseD2D();
     void Render(float animProgress);  // 0.0–1.0 for enter, 1.0–0.0 for exit
-    void DrawBackground(ID2D1RenderTarget* rt, float alpha, float sweepT = 0.f);
+    void DrawBackground(ID2D1RenderTarget* rt, float alpha, float sweepT = 0.f, ID2D1Bitmap* backdropBmp = nullptr);
     void DrawAccentBar(ID2D1RenderTarget* rt, float alpha);
     void DrawCrescentMark(ID2D1RenderTarget* rt, float alpha);
     void DrawContent(ID2D1RenderTarget* rt, float alpha);
@@ -77,8 +77,10 @@ private:
     void DrawCloseButton(ID2D1RenderTarget* rt, float alpha);
     void DrawCopyButton(ID2D1RenderTarget* rt, float alpha);
     void DrawPauseButton(ID2D1RenderTarget* rt, float alpha);
-    void DrawGrainTexture(ID2D1RenderTarget* rt, float alpha);
+    void DrawGrainTexture(ID2D1RenderTarget* rt, float alpha, float radius = -1.f);
     void UpdateLayered(float alpha, float slideOffsetX = 0.f, float slideOffsetY = 0.f, float scaleX = 1.0f, float scaleY = 1.0f, float sweepT = 0.f);
+    ID2D1Bitmap* CaptureBlurredBackdrop(int screenX, int screenY, int width, int height);
+    void ReleaseBackdropBitmaps();
 
     // Message handlers
     LRESULT OnTimer(UINT_PTR timerId);
@@ -109,8 +111,10 @@ private:
         HWND hwnd = nullptr;
         int  x = 0;
         int  y = 0;
+        ID2D1Bitmap* backdropBitmap = nullptr;
     };
     std::vector<SecondaryPopup> m_secondaryPopups;
+    ID2D1Bitmap* m_backdropBitmap = nullptr;
     size_t m_activeSecondaryCount = 0;
     void HideAll();
 

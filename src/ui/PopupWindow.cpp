@@ -52,6 +52,56 @@ namespace {
             }
         }
     }
+    // Separable O(W*H) sliding-window box blur (3 passes approximate Gaussian frosted diffusion cleanly)
+    void BoxBlurH(const uint32_t* src, uint32_t* dst, int w, int h, int r) {
+        const int winSize = r * 2 + 1;
+        for (int y = 0; y < h; ++y) {
+            const uint32_t* row = src + y * w;
+            uint32_t* out = dst + y * w;
+            int sr = 0, sg = 0, sb = 0;
+            for (int k = -r; k <= r; ++k) {
+                uint32_t p = row[std::clamp(k, 0, w - 1)];
+                sr += (int)((p >> 16) & 0xFF);
+                sg += (int)((p >> 8)  & 0xFF);
+                sb += (int)(p & 0xFF);
+            }
+            for (int x = 0; x < w; ++x) {
+                out[x] = 0xFF000000u
+                    | ((uint32_t)(sr / winSize) << 16)
+                    | ((uint32_t)(sg / winSize) << 8)
+                    | (uint32_t)(sb / winSize);
+                uint32_t pAdd = row[std::clamp(x + r + 1, 0, w - 1)];
+                uint32_t pSub = row[std::clamp(x - r,     0, w - 1)];
+                sr += (int)((pAdd >> 16) & 0xFF) - (int)((pSub >> 16) & 0xFF);
+                sg += (int)((pAdd >> 8)  & 0xFF) - (int)((pSub >> 8)  & 0xFF);
+                sb += (int)(pAdd & 0xFF)         - (int)(pSub & 0xFF);
+            }
+        }
+    }
+
+    void BoxBlurV(const uint32_t* src, uint32_t* dst, int w, int h, int r) {
+        const int winSize = r * 2 + 1;
+        for (int x = 0; x < w; ++x) {
+            int sr = 0, sg = 0, sb = 0;
+            for (int k = -r; k <= r; ++k) {
+                uint32_t p = src[std::clamp(k, 0, h - 1) * w + x];
+                sr += (int)((p >> 16) & 0xFF);
+                sg += (int)((p >> 8)  & 0xFF);
+                sb += (int)(p & 0xFF);
+            }
+            for (int y = 0; y < h; ++y) {
+                dst[y * w + x] = 0xFF000000u
+                    | ((uint32_t)(sr / winSize) << 16)
+                    | ((uint32_t)(sg / winSize) << 8)
+                    | (uint32_t)(sb / winSize);
+                uint32_t pAdd = src[std::clamp(y + r + 1, 0, h - 1) * w + x];
+                uint32_t pSub = src[std::clamp(y - r,     0, h - 1) * w + x];
+                sr += (int)((pAdd >> 16) & 0xFF) - (int)((pSub >> 16) & 0xFF);
+                sg += (int)((pAdd >> 8)  & 0xFF) - (int)((pSub >> 8)  & 0xFF);
+                sb += (int)(pAdd & 0xFF)         - (int)(pSub & 0xFF);
+            }
+        }
+    }
 }
 
 void PopupWindow::UpdateCaptureExclusion() {
@@ -60,6 +110,83 @@ void PopupWindow::UpdateCaptureExclusion() {
     for (const auto& sec : m_secondaryPopups) {
         ApplyCaptureExclusionToWindow(sec.hwnd, exclude);
     }
+}
+
+void PopupWindow::ReleaseBackdropBitmaps() {
+    if (m_backdropBitmap) {
+        m_backdropBitmap->Release();
+        m_backdropBitmap = nullptr;
+    }
+    for (auto& sec : m_secondaryPopups) {
+        if (sec.backdropBitmap) {
+            sec.backdropBitmap->Release();
+            sec.backdropBitmap = nullptr;
+        }
+    }
+}
+
+ID2D1Bitmap* PopupWindow::CaptureBlurredBackdrop(int screenX, int screenY, int width, int height) {
+    if (!m_dcRenderTarget || width <= 0 || height <= 0) return nullptr;
+
+    HDC hdcScreen = GetDC(nullptr);
+    if (!hdcScreen) return nullptr;
+
+    HDC hdcMem = CreateCompatibleDC(hdcScreen);
+    if (!hdcMem) {
+        ReleaseDC(nullptr, hdcScreen);
+        return nullptr;
+    }
+
+    BITMAPINFO bmi{};
+    bmi.bmiHeader.biSize        = sizeof(BITMAPINFOHEADER);
+    bmi.bmiHeader.biWidth       = width;
+    bmi.bmiHeader.biHeight      = -height;
+    bmi.bmiHeader.biPlanes      = 1;
+    bmi.bmiHeader.biBitCount    = 32;
+    bmi.bmiHeader.biCompression = BI_RGB;
+
+    void* pvBits = nullptr;
+    HBITMAP hBmp = CreateDIBSection(hdcScreen, &bmi, DIB_RGB_COLORS, &pvBits, nullptr, 0);
+    if (!hBmp || !pvBits) {
+        if (hBmp) DeleteObject(hBmp);
+        DeleteDC(hdcMem);
+        ReleaseDC(nullptr, hdcScreen);
+        return nullptr;
+    }
+
+    HBITMAP hOld = (HBITMAP)SelectObject(hdcMem, hBmp);
+    bool captured = (BitBlt(hdcMem, 0, 0, width, height, hdcScreen, screenX, screenY, SRCCOPY) != FALSE);
+
+    std::vector<uint32_t> bufA;
+    std::vector<uint32_t> bufB;
+    if (captured) {
+        size_t count = (size_t)width * (size_t)height;
+        bufA.assign(static_cast<const uint32_t*>(pvBits), static_cast<const uint32_t*>(pvBits) + count);
+        bufB.resize(count);
+
+        int radius = std::clamp((int)std::lround(12.f * m_dpiScale), 8, 24);
+        for (int pass = 0; pass < 3; ++pass) {
+            BoxBlurH(bufA.data(), bufB.data(), width, height, radius);
+            BoxBlurV(bufB.data(), bufA.data(), width, height, radius);
+        }
+    }
+
+    SelectObject(hdcMem, hOld);
+    DeleteObject(hBmp);
+    DeleteDC(hdcMem);
+    ReleaseDC(nullptr, hdcScreen);
+
+    if (!captured || bufA.empty()) return nullptr;
+
+    D2D1_BITMAP_PROPERTIES props = D2D1::BitmapProperties(
+        D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED),
+        96.0f, 96.0f);
+    ID2D1Bitmap* d2dBmp = nullptr;
+    if (FAILED(m_dcRenderTarget->CreateBitmap(D2D1::SizeU((UINT32)width, (UINT32)height),
+                                              bufA.data(), (UINT32)(width * 4), &props, &d2dBmp))) {
+        return nullptr;
+    }
+    return d2dBmp;
 }
 
 PopupWindow& PopupWindow::Instance() {
@@ -319,6 +446,7 @@ bool PopupWindow::InitD2D() {
 }
 
 void PopupWindow::ReleaseD2D() {
+    ReleaseBackdropBitmaps();
     if (m_grainBitmap)         { m_grainBitmap->Release();         m_grainBitmap         = nullptr; }
     for (int i = 0; i < 6; ++i) {
         if (m_logoBitmaps[i]) { m_logoBitmaps[i]->Release(); m_logoBitmaps[i] = nullptr; }
@@ -474,6 +602,13 @@ void PopupWindow::Show(const ContentItem* item, bool force) {
         targetMonitors = monitors;
     }
 
+    ReleaseBackdropBitmaps();
+    if (s.popupSurface == PopupSurfaceStyle::FrostedAcrylic && m_state != PopupAnimState::Hidden) {
+        // Temporarily hide existing popup so BitBlt captures clean desktop pixels behind it
+        HideAll();
+        DwmFlush();
+    }
+
     if (s.popupMonitor == PopupMonitor::All && targetMonitors.size() > 1) {
         // Multi-monitor simultaneous mode: show popups on all non-fullscreen screens
         RECT pos0 = CalculatePositionForWorkArea(m_width, m_height, targetMonitors[0].rcWork);
@@ -490,7 +625,7 @@ void PopupWindow::Show(const ContentItem* item, bool force) {
             if (hSec) {
                 ApplyCaptureExclusionToWindow(hSec, s.hideFromCapture);
                 SetWindowLongPtrW(hSec, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
-                m_secondaryPopups.push_back({ hSec, 0, 0 });
+                m_secondaryPopups.push_back({ hSec, 0, 0, nullptr });
                 LOG_INFO("Created secondary popup HWND=" + std::to_string(reinterpret_cast<uintptr_t>(hSec)));
             } else {
                 LOG_ERROR("Failed to create secondary popup! Error=" + std::to_string(GetLastError()));
@@ -503,9 +638,6 @@ void PopupWindow::Show(const ContentItem* item, bool force) {
             RECT posI = CalculatePositionForWorkArea(m_width, m_height, targetMonitors[i + 1].rcWork);
             m_secondaryPopups[i].x = posI.left;
             m_secondaryPopups[i].y = posI.top;
-            SetWindowPos(m_secondaryPopups[i].hwnd, HWND_TOPMOST,
-                posI.left, posI.top,
-                m_width, m_height, SWP_NOACTIVATE | SWP_SHOWWINDOW);
         }
 
         for (size_t i = m_activeSecondaryCount; i < m_secondaryPopups.size(); ++i) {
@@ -535,8 +667,24 @@ void PopupWindow::Show(const ContentItem* item, bool force) {
         }
     }
 
+    // Capture & blur the real backdrop behind each popup before showing any window
+    if (s.popupSurface == PopupSurfaceStyle::FrostedAcrylic) {
+        m_backdropBitmap = CaptureBlurredBackdrop(m_screenX, m_screenY, m_width, m_height);
+        for (size_t i = 0; i < m_activeSecondaryCount; ++i) {
+            m_secondaryPopups[i].backdropBitmap = CaptureBlurredBackdrop(
+                m_secondaryPopups[i].x, m_secondaryPopups[i].y, m_width, m_height);
+        }
+    }
+
     // Sync capture exclusion affinity before displaying windows
     UpdateCaptureExclusion();
+
+    // Show active secondary monitor popups
+    for (size_t i = 0; i < m_activeSecondaryCount; ++i) {
+        SetWindowPos(m_secondaryPopups[i].hwnd, HWND_TOPMOST,
+            m_secondaryPopups[i].x, m_secondaryPopups[i].y,
+            m_width, m_height, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    }
 
     // Position and show the primary window (still transparent)
     SetWindowPos(m_hwnd, HWND_TOPMOST,
@@ -935,52 +1083,62 @@ void PopupWindow::UpdateLayered(float alpha, float slideOffsetX, float slideOffs
         m_cachedBmpHeight = m_height;
     }
 
-    // Bind DC to D2D render target
-    RECT rcBounds = { 0, 0, m_width, m_height };
-    HRESULT hrBind = m_dcRenderTarget->BindDC(m_hCachedMemDC, &rcBounds);
-    if (FAILED(hrBind)) {
-        LOG_WARN("Popup: BindDC failed, skipping frame");
+    // Bind DC and render one popup frame cleanly
+    auto renderForBackdrop = [&](ID2D1Bitmap* backdropBmp) -> bool {
+        RECT rcBounds = { 0, 0, m_width, m_height };
+        HRESULT hrBind = m_dcRenderTarget->BindDC(m_hCachedMemDC, &rcBounds);
+        if (FAILED(hrBind)) {
+            LOG_WARN("Popup: BindDC failed, skipping frame");
+            return false;
+        }
+
+        const auto sCur = Settings::Instance().GetCopy();
+        float cornerR = ds::Dims::PopupRadius * m_dpiScale;
+        if (sCur.popupCorner == PopupCornerStyle::Squircle) cornerR = 8.f * m_dpiScale;
+        else if (sCur.popupCorner == PopupCornerStyle::Capsule) cornerR = 24.f * m_dpiScale;
+
+        m_dcRenderTarget->BeginDraw();
+        m_dcRenderTarget->Clear(D2D1::ColorF(0, 0));
+
+        if (scaleX != 1.0f || scaleY != 1.0f) {
+            D2D1_POINT_2F center = D2D1::Point2F((float)m_width * 0.5f, (float)m_height * 0.5f);
+            m_dcRenderTarget->SetTransform(D2D1::Matrix3x2F::Scale(scaleX, scaleY, center));
+        } else {
+            m_dcRenderTarget->SetTransform(D2D1::Matrix3x2F::Identity());
+        }
+
+        DrawBackground(m_dcRenderTarget, alpha, sweepT, backdropBmp);
+        DrawGrainTexture(m_dcRenderTarget, alpha, cornerR);
+        DrawAccentBar(m_dcRenderTarget, alpha);
+        DrawCrescentMark(m_dcRenderTarget, alpha);
+        DrawContent(m_dcRenderTarget, alpha);
+        DrawCounterPill(m_dcRenderTarget, alpha);
+        DrawCloseButton(m_dcRenderTarget, alpha);
+        DrawCopyButton(m_dcRenderTarget, alpha);
+        DrawPauseButton(m_dcRenderTarget, alpha);
+
+        m_dcRenderTarget->SetTransform(D2D1::Matrix3x2F::Identity());
+
+        HRESULT hrEnd = m_dcRenderTarget->EndDraw();
+        if (hrEnd == D2DERR_RECREATE_TARGET) {
+            LOG_WARN("Popup D2DERR_RECREATE_TARGET — recreating Direct2D resources");
+            ReleaseD2D();
+            if (InitD2D()) {
+                GenerateGrainBitmap();
+            }
+            return false;
+        } else if (FAILED(hrEnd)) {
+            LOG_WARN("Popup EndDraw failed: 0x" + std::to_string(hrEnd));
+        }
+        return true;
+    };
+
+    if (!renderForBackdrop(m_backdropBitmap)) {
         ReleaseDC(nullptr, hdcScreen);
         return;
     }
 
-    m_dcRenderTarget->BeginDraw();
-    m_dcRenderTarget->Clear(D2D1::ColorF(0, 0));
-
-    if (scaleX != 1.0f || scaleY != 1.0f) {
-        D2D1_POINT_2F center = D2D1::Point2F((float)m_width * 0.5f, (float)m_height * 0.5f);
-        m_dcRenderTarget->SetTransform(D2D1::Matrix3x2F::Scale(scaleX, scaleY, center));
-    } else {
-        m_dcRenderTarget->SetTransform(D2D1::Matrix3x2F::Identity());
-    }
-
-    // Draw all layers
-    DrawBackground(m_dcRenderTarget, alpha, sweepT);
-    DrawGrainTexture(m_dcRenderTarget, alpha);
-    DrawAccentBar(m_dcRenderTarget, alpha);
-    DrawCrescentMark(m_dcRenderTarget, alpha);
-    DrawContent(m_dcRenderTarget, alpha);
-    DrawCounterPill(m_dcRenderTarget, alpha);
-    DrawCloseButton(m_dcRenderTarget, alpha);
-    DrawCopyButton(m_dcRenderTarget, alpha);
-    DrawPauseButton(m_dcRenderTarget, alpha);
-
-    // Reset transform
-    m_dcRenderTarget->SetTransform(D2D1::Matrix3x2F::Identity());
-
-    HRESULT hrEnd = m_dcRenderTarget->EndDraw();
-    if (hrEnd == D2DERR_RECREATE_TARGET) {
-        LOG_WARN("Popup D2DERR_RECREATE_TARGET — recreating Direct2D resources");
-        ReleaseD2D();
-        if (InitD2D()) {
-            GenerateGrainBitmap();
-        }
-        return;
-    } else if (FAILED(hrEnd)) {
-        LOG_WARN("Popup EndDraw failed: 0x" + std::to_string(hrEnd));
-    }
-
-    // UpdateLayeredWindow
+    // UpdateLayeredWindow for primary popup
     POINT ptSrc  = { 0, 0 };
     SIZE  szWnd  = { m_width, m_height };
     BLENDFUNCTION blend{ AC_SRC_OVER, 0, 255, AC_SRC_ALPHA };
@@ -997,6 +1155,9 @@ void PopupWindow::UpdateLayered(float alpha, float slideOffsetX, float slideOffs
         for (size_t i = 0; i < limit; ++i) {
             const auto& sec = m_secondaryPopups[i];
             if (sec.hwnd && IsWindow(sec.hwnd)) {
+                if (sec.backdropBitmap) {
+                    renderForBackdrop(sec.backdropBitmap);
+                }
                 POINT ptSec = { sec.x + (int)slideOffsetX, sec.y + (int)slideOffsetY };
                 if (!UpdateLayeredWindow(sec.hwnd, hdcScreen, &ptSec, &szWnd,
                     m_hCachedMemDC, &ptSrc, 0, &blend, ULW_ALPHA)) {
@@ -1014,7 +1175,7 @@ void PopupWindow::UpdateLayered(float alpha, float slideOffsetX, float slideOffs
     ReleaseDC(nullptr, hdcScreen);
 }
 
-void PopupWindow::DrawBackground(ID2D1RenderTarget* rt, float alpha, float sweepT) {
+void PopupWindow::DrawBackground(ID2D1RenderTarget* rt, float alpha, float sweepT, ID2D1Bitmap* backdropBmp) {
     if (!rt) return;
 
     const auto s = Settings::Instance().GetCopy();
@@ -1029,9 +1190,10 @@ void PopupWindow::DrawBackground(ID2D1RenderTarget* rt, float alpha, float sweep
         D2D1::RectF(0.f, 0.f, (float)m_width, (float)m_height),
         r, r };
 
-    // 1. Surface Material Gradient
+    // 1. Surface Material Gradient (+ Real Frosted Backdrop for FrostedAcrylic)
     D2D1_GRADIENT_STOP stops[4];
     D2D1_GRADIENT_STOP borderStops[3];
+    bool useRealGlass = (s.popupSurface == PopupSurfaceStyle::FrostedAcrylic && backdropBmp != nullptr);
 
     if (s.popupSurface == PopupSurfaceStyle::DeepObsidian) {
         // High contrast pure obsidian velvet
@@ -1054,15 +1216,28 @@ void PopupWindow::DrawBackground(ID2D1RenderTarget* rt, float alpha, float sweep
         borderStops[1].position = 0.45f; borderStops[1].color = ds::Aurora::PopupBorderStop1(1.25f);
         borderStops[2].position = 1.0f;  borderStops[2].color = ds::Aurora::PopupBorderStop2(1.0f);
     } else {
-        // Frosted Acrylic Glass (Default)
-        stops[0].position = 0.00f; stops[0].color = ds::Aurora::PopupStop0(1.0f);
-        stops[1].position = 0.35f; stops[1].color = ds::Aurora::PopupStop1(1.0f);
-        stops[2].position = 0.70f; stops[2].color = ds::Aurora::PopupStop2(1.0f);
-        stops[3].position = 1.00f; stops[3].color = ds::Aurora::PopupStop3(1.0f);
+        // Real Frosted Acrylic Glass (live blurred backdrop + translucent theme Aurora gradient)
+        float tintScale = useRealGlass ? 0.68f : 1.0f;
+        stops[0].position = 0.00f; stops[0].color = ds::Aurora::PopupStop0(tintScale * 0.94f);
+        stops[1].position = 0.35f; stops[1].color = ds::Aurora::PopupStop1(tintScale * 0.98f);
+        stops[2].position = 0.70f; stops[2].color = ds::Aurora::PopupStop2(tintScale * 1.03f);
+        stops[3].position = 1.00f; stops[3].color = ds::Aurora::PopupStop3(tintScale * 1.08f);
 
-        borderStops[0].position = 0.0f;  borderStops[0].color = ds::Aurora::PopupBorderStop0(1.0f);
-        borderStops[1].position = 0.45f; borderStops[1].color = ds::Aurora::PopupBorderStop1(1.0f);
-        borderStops[2].position = 1.0f;  borderStops[2].color = ds::Aurora::PopupBorderStop2(1.0f);
+        borderStops[0].position = 0.0f;  borderStops[0].color = ds::Accent::Primary(0.85f);
+        borderStops[1].position = 0.45f; borderStops[1].color = ds::Rgba(0xFF, 0xFF, 0xFF, 0.32f);
+        borderStops[2].position = 1.0f;  borderStops[2].color = ds::Aurora::PopupBorderStop2(0.85f);
+    }
+
+    bool glassLayerPushed = false;
+    ID2D1RoundedRectangleGeometry* roundGeo = nullptr;
+    if (useRealGlass && m_d2dFactory) {
+        if (SUCCEEDED(m_d2dFactory->CreateRoundedRectangleGeometry(bgRect, &roundGeo)) && roundGeo) {
+            rt->PushLayer(
+                D2D1::LayerParameters(bgRect.rect, roundGeo, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE, D2D1::IdentityMatrix(), alpha),
+                nullptr);
+            glassLayerPushed = true;
+            rt->DrawBitmap(backdropBmp, bgRect.rect, 1.0f, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
+        }
     }
 
     ID2D1GradientStopCollection* pStopCollection = nullptr;
@@ -1083,12 +1258,12 @@ void PopupWindow::DrawBackground(ID2D1RenderTarget* rt, float alpha, float sweep
             &pGradientBrush);
 
         if (SUCCEEDED(hr) && pGradientBrush) {
-            pGradientBrush->SetOpacity(alpha);
+            pGradientBrush->SetOpacity(glassLayerPushed ? 1.0f : alpha);
             rt->FillRoundedRectangle(bgRect, pGradientBrush);
             pGradientBrush->Release();
         }
         pStopCollection->Release();
-    } else {
+    } else if (!glassLayerPushed) {
         // Fallback solid fill
         ID2D1SolidColorBrush* brush = nullptr;
         auto bgColor = ds::PopupBg();
@@ -1099,6 +1274,40 @@ void PopupWindow::DrawBackground(ID2D1RenderTarget* rt, float alpha, float sweep
             brush->Release();
         }
     }
+
+    if (glassLayerPushed) {
+        // Diagonal specular glass sheen + subtle top-left light refraction
+        D2D1_GRADIENT_STOP sheenStops[3] = {
+            { 0.00f, D2D1::ColorF(1.f, 1.f, 1.f, 0.14f) },
+            { 0.45f, D2D1::ColorF(1.f, 1.f, 1.f, 0.04f) },
+            { 1.00f, D2D1::ColorF(1.f, 1.f, 1.f, 0.00f) }
+        };
+        ID2D1GradientStopCollection* pSheenCol = nullptr;
+        if (SUCCEEDED(rt->CreateGradientStopCollection(sheenStops, 3, D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP, &pSheenCol)) && pSheenCol) {
+            ID2D1LinearGradientBrush* pSheenBrush = nullptr;
+            if (SUCCEEDED(rt->CreateLinearGradientBrush(
+                    D2D1::LinearGradientBrushProperties(D2D1::Point2F(0.f, 0.f), D2D1::Point2F((float)m_width * 0.65f, (float)m_height * 0.85f)),
+                    pSheenCol, &pSheenBrush)) && pSheenBrush) {
+                rt->FillRoundedRectangle(bgRect, pSheenBrush);
+                pSheenBrush->Release();
+            }
+            pSheenCol->Release();
+        }
+
+        // Inner crisp glass highlight rim
+        ID2D1SolidColorBrush* innerRimBrush = nullptr;
+        if (SUCCEEDED(rt->CreateSolidColorBrush(D2D1::ColorF(1.f, 1.f, 1.f, 0.14f), &innerRimBrush)) && innerRimBrush) {
+            D2D1_ROUNDED_RECT innerRect{
+                D2D1::RectF(1.5f, 1.5f, (float)m_width - 1.5f, (float)m_height - 1.5f),
+                std::max(1.f, r - 1.5f), std::max(1.f, r - 1.5f)
+            };
+            rt->DrawRoundedRectangle(innerRect, innerRimBrush, 1.0f);
+            innerRimBrush->Release();
+        }
+
+        rt->PopLayer();
+    }
+    if (roundGeo) roundGeo->Release();
 
     // 2. Arabesque Islamic Lattice Overlay
     if (s.arabesqueOverlay) {
@@ -1164,9 +1373,28 @@ void PopupWindow::DrawBackground(ID2D1RenderTarget* rt, float alpha, float sweep
     }
 }
 
-void PopupWindow::DrawGrainTexture(ID2D1RenderTarget* rt, float alpha) {
-    if (!m_grainBitmap || alpha < 0.05f) return;
-    (void)rt;
+void PopupWindow::DrawGrainTexture(ID2D1RenderTarget* rt, float alpha, float radius) {
+    if (!rt || !m_grainBitmap || alpha < 0.05f) return;
+    const auto s = Settings::Instance().GetCopy();
+    if (s.popupSurface != PopupSurfaceStyle::FrostedAcrylic) return;
+
+    if (radius < 0.f) {
+        radius = ds::Dims::PopupRadius * m_dpiScale;
+        if (s.popupCorner == PopupCornerStyle::Squircle) radius = 8.f * m_dpiScale;
+        else if (s.popupCorner == PopupCornerStyle::Capsule) radius = 24.f * m_dpiScale;
+    }
+
+    ID2D1BitmapBrush* grainBrush = nullptr;
+    D2D1_BITMAP_BRUSH_PROPERTIES bbp = D2D1::BitmapBrushProperties(
+        D2D1_EXTEND_MODE_WRAP, D2D1_EXTEND_MODE_WRAP, D2D1_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR);
+    D2D1_BRUSH_PROPERTIES bp = D2D1::BrushProperties(0.24f * alpha);
+    if (SUCCEEDED(rt->CreateBitmapBrush(m_grainBitmap, bbp, bp, &grainBrush)) && grainBrush) {
+        D2D1_ROUNDED_RECT bgRect{
+            D2D1::RectF(0.f, 0.f, (float)m_width, (float)m_height),
+            radius, radius };
+        rt->FillRoundedRectangle(bgRect, grainBrush);
+        grainBrush->Release();
+    }
 }
 
 void PopupWindow::DrawAccentBar(ID2D1RenderTarget* rt, float alpha) {
