@@ -14,6 +14,8 @@
 
 namespace dhikr {
 
+static constexpr float kRemindersHeaderH = 48.f;
+
 RemindersPage::RemindersPage() {
     auto* dwf = Application::Instance().DWriteFactory();
     if (!dwf) return;
@@ -307,13 +309,19 @@ void RemindersPage::Draw(ID2D1RenderTarget* rt, const D2D1_RECT_F& bounds) {
     float y = bounds.top + padY - m_scrollY;
 
     // ── 1. Page Header: Title + Subtitle + Global Toggle Switch ─────────────
-    float headH = 40.f * m_dpiScale;
+    float headH = kRemindersHeaderH * m_dpiScale;
+    D2D1_RECT_F tr = isRtl
+        ? D2D1::RectF(x + 60.f * m_dpiScale, y - 2.f * m_dpiScale, x + w, y + 28.f * m_dpiScale)
+        : D2D1::RectF(x, y - 2.f * m_dpiScale, x + w - 60.f * m_dpiScale, y + 28.f * m_dpiScale);
+    D2D1_RECT_F sr = isRtl
+        ? D2D1::RectF(x + 60.f * m_dpiScale, y + 29.f * m_dpiScale, x + w, y + headH)
+        : D2D1::RectF(x, y + 29.f * m_dpiScale, x + w - 60.f * m_dpiScale, y + headH);
+
     if (m_tfTitle) {
         m_brush->SetColor(ds::TextPrimary());
         m_tfTitle->SetReadingDirection(isRtl ? DWRITE_READING_DIRECTION_RIGHT_TO_LEFT : DWRITE_READING_DIRECTION_LEFT_TO_RIGHT);
         m_tfTitle->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
-        D2D1_RECT_F tr = isRtl ? D2D1::RectF(x, y, x + w - 120.f*m_dpiScale, y + 24*m_dpiScale)
-                              : D2D1::RectF(x, y, x + w - 120.f*m_dpiScale, y + 24*m_dpiScale);
+        m_tfTitle->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
         std::wstring title = Localization::Instance().Get(L"nav.reminders");
         rt->DrawTextW(title.c_str(), (UINT32)title.size(), m_tfTitle, tr, m_brush);
     }
@@ -321,8 +329,7 @@ void RemindersPage::Draw(ID2D1RenderTarget* rt, const D2D1_RECT_F& bounds) {
         m_brush->SetColor(ds::TextSecondary());
         m_tfSub->SetReadingDirection(isRtl ? DWRITE_READING_DIRECTION_RIGHT_TO_LEFT : DWRITE_READING_DIRECTION_LEFT_TO_RIGHT);
         m_tfSub->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
-        D2D1_RECT_F sr = isRtl ? D2D1::RectF(x, y + 24*m_dpiScale, x + w - 120.f*m_dpiScale, y + 40*m_dpiScale)
-                              : D2D1::RectF(x, y + 24*m_dpiScale, x + w - 120.f*m_dpiScale, y + 40*m_dpiScale);
+        m_tfSub->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
         std::wstring sub = isRtl ? L"اضبط أوقات التذكيرات وجدول أيام الأسبوع" : L"Configure notification timing and active days";
         rt->DrawTextW(sub.c_str(), (UINT32)sub.size(), m_tfSub, sr, m_brush);
     }
@@ -584,7 +591,7 @@ D2D1_RECT_F RemindersPage::GetSaveRect() const {
     float gap  = 12.f * m_dpiScale;
     
     // Position below weekly schedule card
-    float headH = 40.f * m_dpiScale;
+    float headH = kRemindersHeaderH * m_dpiScale;
     float qCardH = 104.f * m_dpiScale;
     float sHeaderH = 28.f * m_dpiScale;
     float rowH = 32.f * m_dpiScale;
@@ -603,7 +610,7 @@ D2D1_RECT_F RemindersPage::GetPreviewRect() const {
     float btnH     = 38.f * m_dpiScale;
     float gap      = 12.f * m_dpiScale;
     
-    float headH = 40.f * m_dpiScale;
+    float headH = kRemindersHeaderH * m_dpiScale;
     float qCardH = 104.f * m_dpiScale;
     float sHeaderH = 28.f * m_dpiScale;
     float rowH = 32.f * m_dpiScale;
@@ -665,7 +672,7 @@ bool RemindersPage::OnLButtonDown(int x, int y) {
     }
 
     // 2. Quick Controls Card Hit-Testing
-    float headH = 40.f * m_dpiScale;
+    float headH = kRemindersHeaderH * m_dpiScale;
     float qCardY = m_contentY - m_scrollY + headH + 12.f * m_dpiScale;
     float colGap = 10.f * m_dpiScale;
     float chipH  = 24.f * m_dpiScale;
@@ -930,7 +937,7 @@ bool RemindersPage::OnMouseMove(int x, int y) {
     m_hoveredRow = -1;
 
     // Hit-test Quick Controls Card
-    float headH = 40.f * m_dpiScale;
+    float headH = kRemindersHeaderH * m_dpiScale;
     float qCardY = m_contentY - m_scrollY + headH + 12.f * m_dpiScale;
     float qCardH = 104.f * m_dpiScale;
     float colGap = 10.f * m_dpiScale;
