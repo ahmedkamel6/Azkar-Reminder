@@ -22,7 +22,7 @@ scripts\build_release.bat
 This will:
 1. Configure and build the Release executable (`build\bin\Release\AzkarReminder.exe`) with all static assets (logo, application icons, default library) embedded directly into the binary resources.
 2. Copy the external audio directory to `build\bin\Release\audio\`.
-3. Compile the Inno Setup script into `release\AzkarReminder-Setup-v1.1.0.exe`.
+3. Compile the Inno Setup script into `release\AzkarReminder-Windows-Setup.exe`.
 
 ## Manual Build Steps
 
@@ -48,7 +48,7 @@ iscc installer\AzkarReminder.iss
 ```
 (Or use the full path to `ISCC.exe`, e.g., `"%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe"` or `"C:\Program Files (x86)\Inno Setup 6\ISCC.exe"`).
 
-The resulting installer `AzkarReminder-Setup-v1.1.0.exe` will be located in `release\`.
+The resulting installer `AzkarReminder-Windows-Setup.exe` will be located in `release\`.
 
 ## 4. Verification
 Run the verification script to confirm build readiness:

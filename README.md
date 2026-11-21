@@ -1,38 +1,83 @@
+<div align="center">
+
+<img src="assets/images/logo.png" alt="Azkar Reminder" width="88" />
+
 # Azkar Reminder
 
-Azkar Reminder is a lightweight, beautifully designed Windows desktop application built with C++ and Direct2D. It helps you remember Allah during your workday by displaying unobtrusive, customizable dhikr notifications on a regular schedule.
+**Quiet, native desktop dhikr reminders for Windows, macOS, and Linux.**
 
-![Azkar Reminder](assets/images/logo.png)
+[![Release](https://img.shields.io/github/v/release/ahmedkamel6/Azkar-Reminder?style=flat-square&color=10B981)](https://github.com/ahmedkamel6/Azkar-Reminder/releases/latest)
+[![Build](https://img.shields.io/github/actions/workflow/status/ahmedkamel6/Azkar-Reminder/build-release.yml?style=flat-square)](https://github.com/ahmedkamel6/Azkar-Reminder/actions)
+[![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux-1F2937?style=flat-square)](#download)
+[![License](https://img.shields.io/badge/license-MIT-0EA5E9?style=flat-square)](LICENSE)
 
-## Features
-- **Unobtrusive Notifications**: Beautiful, smooth sliding popup notifications that don't steal window focus.
-- **Customizable Schedule**: Set your own intervals, quiet hours, and start/end times.
-- **Audio Alerts**: Configurable audio notifications using XAudio2 that bypass Windows background muting for reliable playback.
-- **Embedded Dhikr Library**: Ships with a default set of authentic Adhkar, with support for custom JSON content libraries.
-- **Rich User Interface**: Fluid animations and modern design using native Direct2D/DirectWrite rendering.
-- **Lightweight**: Minimal memory footprint, entirely written in C++ using Win32 APIs with no heavy runtimes like Electron.
-- **History & Analytics**: Local SQLite database to keep track of your dhikr streaks and history locally on your machine.
+</div>
 
-## Installation
-The official user distribution for Azkar Reminder is the standard Windows Installer. Download the latest setup executable from the [Releases](../../releases) page:
+---
 
-1. Download `AzkarReminder-Setup-v1.1.0.exe`
-2. Run the installer wizard and choose your preferences (e.g. desktop shortcut).
-3. The app will install to `C:\Program Files\Azkar Reminder` and register in the Windows Start Menu and Installed Apps.
-4. Launch **Azkar Reminder** from the Start Menu or desktop shortcut.
+Azkar Reminder runs quietly in the system tray and displays non-intrusive popup reminders throughout the day. Built in C++20 with native **Win32 + Direct2D** on Windows and **Qt 6** on macOS/Linux — no Electron, no telemetry, 100% offline.
 
-### System Requirements
-- **OS**: Windows 10 (Version 1809 or newer) or Windows 11.
-- **Architecture**: x64
+## Screenshots
+
+<div align="center">
+  <img src="docs/screenshots/popup.png" alt="Desktop Notification Popup" width="460" />
+</div>
+
+| Dashboard | Schedule |
+| :---: | :---: |
+| <img src="docs/screenshots/home.png" alt="Home Dashboard" width="420" /> | <img src="docs/screenshots/reminders.png" alt="Schedule & Quiet Hours" width="420" /> |
+
+| Dhikr Library | Settings |
+| :---: | :---: |
+| <img src="docs/screenshots/library.png" alt="Dhikr Library" width="420" /> | <img src="docs/screenshots/settings.png" alt="Settings & Themes" width="420" /> |
+
+---
+
+## Download
+
+Grab the latest binaries from **[GitHub Releases](https://github.com/ahmedkamel6/Azkar-Reminder/releases/latest)**:
+
+| Platform | Package | Notes |
+| :--- | :--- | :--- |
+| **Windows (x64)** | `AzkarReminder-Windows-Setup.exe` / `.msix` | Windows 10 (1809+) or Windows 11, PerMonitorV2 HiDPI |
+| **macOS (Universal)** | `Azkar-Reminder-1.2.4-macOS.dmg` | Drag to Applications; run `xattr -cr "/Applications/Azkar Reminder.app"` if Gatekeeper prompts |
+| **Linux (x86_64)** | `AzkarReminder-x86_64.AppImage` | `chmod +x AzkarReminder-x86_64.AppImage && ./AzkarReminder-x86_64.AppImage` |
+
+---
+
+## Key Capabilities
+
+- **Focus-safe popups:** Topmost layered notifications (`WS_EX_NOACTIVATE`) with hover-to-pause, copy, quick-snooze, and interactive tasbih counter.
+- **Flexible scheduling:** Per-weekday windows, configurable intervals, quiet hours, and automatic suppression when fullscreen apps or games are active.
+- **Custom & built-in library:** Ships with authentic Adhkar in Arabic & English, supports adding custom entries, enabling/disabling items, and safe merge-import (with `.bak` backup).
+- **Local-only storage:** History, streaks, and settings stay in `%LOCALAPPDATA%\Azkar Reminder` (Windows) or standard XDG/Application Support directories.
+- **Native audio:** Low-latency XAudio2 playback on Windows with automatic device-loss recovery; miniaudio on macOS/Linux.
+
+---
 
 ## Building from Source
-If you wish to compile the application and build the installer yourself, please refer to the detailed instructions in [docs/BUILD.md](docs/BUILD.md).
 
-## Privacy
-Azkar Reminder is 100% offline. It does not transmit any of your personal data, dhikr history, or preferences over the internet. All data is saved in your local `%LOCALAPPDATA%` directory.
+### Windows (MSVC + Direct2D)
 
-## License
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+```powershell
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --config Release
+ctest --test-dir build -C Release --output-on-failure
+```
 
-## Third-Party Libraries
-See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for information regarding the open-source libraries used in this project.
+### Linux / macOS (Qt 6)
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_QT_APP=ON
+cmake --build build --config Release
+ctest --test-dir build --output-on-failure
+```
+
+See [docs/BUILD.md](docs/BUILD.md) for installer packaging instructions (Inno Setup & MSIX).
+
+---
+
+## Privacy & License
+
+- **Privacy:** 100% offline. No analytics, tracking, or network sync. See [docs/PRIVACY_POLICY.md](docs/PRIVACY_POLICY.md).
+- **License:** [MIT License](LICENSE) — third-party attributions in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

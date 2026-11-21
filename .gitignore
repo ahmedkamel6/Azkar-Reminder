@@ -12,6 +12,8 @@ Release/
 *.zip
 *.AppImage
 *.dmg
+*.msix
+*.cer
 
 # CMake files
 CMakeCache.txt
