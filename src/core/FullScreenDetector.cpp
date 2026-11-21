@@ -1,5 +1,6 @@
 #include "FullScreenDetector.h"
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
 #include <dwmapi.h>
 #pragma comment(lib, "dwmapi.lib")
@@ -48,23 +49,8 @@ bool IsWindowFullScreenOnMonitor(HWND hwnd, HMONITOR& outMon) {
         return false;
     }
 
-    // A maximized desktop window is NOT a full-screen application.
-    // Users actively browse the web, write code, or read in maximized apps.
-    if (IsZoomed(hwnd)) {
-        return false;
-    }
-
-    LONG style = GetWindowLongW(hwnd, GWL_STYLE);
-    if (style & WS_MAXIMIZE) {
-        return false;
-    }
-
-    // Resizable overlapping windows with thick resizing borders are regular desktop apps
-    if ((style & WS_THICKFRAME) && !(style & WS_POPUP)) {
-        return false;
-    }
-
-    // Check if the window bounds completely cover its monitor
+    // Check monitor coverage before inspecting window styles, because Chromium/Brave/Edge
+    // and some video players retain WS_THICKFRAME or WS_MAXIMIZE while in HTML5 fullscreen.
     HMONITOR hMon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONULL);
     if (!hMon) return false;
 
@@ -82,12 +68,35 @@ bool IsWindowFullScreenOnMonitor(HWND hwnd, HMONITOR& outMon) {
         return false;
     }
 
-    // Distinguish true fullscreen / borderless applications from normal maximized windows
-    if ((style & WS_CAPTION) == WS_CAPTION) {
-        POINT ptTopLeft = { 0, 0 };
-        ClientToScreen(hwnd, &ptTopLeft);
-        if (ptTopLeft.y > mi.rcMonitor.top + 10) {
+    // Ignore windows that only span the whole screen due to normal maximization:
+    // 1. If the monitor has a visible taskbar (rcWork is smaller than rcMonitor by >16px),
+    //    a maximized app stops at rcWork (+ ~8px DWM border) and never covers rcMonitor.
+    bool hasTaskbar = ((mi.rcMonitor.bottom - mi.rcWork.bottom) > 16 ||
+                       (mi.rcWork.top - mi.rcMonitor.top) > 16 ||
+                       (mi.rcWork.left - mi.rcMonitor.left) > 16 ||
+                       (mi.rcMonitor.right - mi.rcWork.right) > 16);
+
+    // 2. Normal maximized Win32/Chromium windows include ~8px DWM resize-frame overhang
+    //    around rcMonitor, whereas true fullscreen apps align flush with rcMonitor (+-3px).
+    bool tightMonitorBounds = (std::abs(rcWin.left   - mi.rcMonitor.left)   <= 3 &&
+                               std::abs(rcWin.top    - mi.rcMonitor.top)    <= 3 &&
+                               std::abs(rcWin.right  - mi.rcMonitor.right)  <= 3 &&
+                               std::abs(rcWin.bottom - mi.rcMonitor.bottom) <= 3);
+
+    if (!hasTaskbar && !tightMonitorBounds) {
+        LONG style = GetWindowLongW(hwnd, GWL_STYLE);
+        if (IsZoomed(hwnd) || (style & WS_MAXIMIZE)) {
             return false;
+        }
+        if ((style & WS_THICKFRAME) && !(style & WS_POPUP)) {
+            return false;
+        }
+        if ((style & WS_CAPTION) == WS_CAPTION) {
+            POINT ptTopLeft = { 0, 0 };
+            ClientToScreen(hwnd, &ptTopLeft);
+            if (ptTopLeft.y > mi.rcMonitor.top + 10) {
+                return false;
+            }
         }
     }
 
