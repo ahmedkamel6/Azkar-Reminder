@@ -20,8 +20,10 @@ static std::string WideToUtf8(const std::wstring& wstr) {
     if (wstr.empty()) return "";
 #ifdef _WIN32
     int size = WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), -1, nullptr, 0, nullptr, nullptr);
+    if (size <= 1) return "";
     std::string result(size - 1, 0);
-    WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), -1, result.data(), size, nullptr, nullptr);
+    int written = WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), -1, result.data(), size, nullptr, nullptr);
+    if (written <= 0) return "";
     return result;
 #else
     std::string result;
@@ -45,8 +47,10 @@ static std::wstring Utf8ToWide(const std::string& str) {
     if (str.empty()) return L"";
 #ifdef _WIN32
     int size = MultiByteToWideChar(CP_UTF8, 0, str.c_str(), -1, nullptr, 0);
+    if (size <= 1) return L"";
     std::wstring result(size - 1, 0);
-    MultiByteToWideChar(CP_UTF8, 0, str.c_str(), -1, result.data(), size);
+    int written = MultiByteToWideChar(CP_UTF8, 0, str.c_str(), -1, result.data(), size);
+    if (written <= 0) return L"";
     return result;
 #else
     std::wstring result;
@@ -343,7 +347,12 @@ bool Settings::Save() {
 }
 
 void Settings::NotifyChanged() {
-    for (auto& cb : m_changeCallbacks) {
+    std::vector<ChangeCallback> callbacks;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        callbacks = m_changeCallbacks;
+    }
+    for (auto& cb : callbacks) {
         if (cb) cb();
     }
 }

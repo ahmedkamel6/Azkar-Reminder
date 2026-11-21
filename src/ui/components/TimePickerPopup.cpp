@@ -34,9 +34,13 @@ void TimePickerPopup::Show(HWND parent, int x, int y, int initialHour, int initi
     m_hoveredElement = -1;
     m_pressedElement = -1;
 
-    HDC hdc = GetDC(nullptr);
-    m_dpiScale = (float)GetDeviceCaps(hdc, LOGPIXELSX) / 96.f;
-    ReleaseDC(nullptr, hdc);
+    if (parent && IsWindow(parent)) {
+        m_dpiScale = (float)GetDpiForWindow(parent) / 96.f;
+    } else {
+        HDC hdc = GetDC(nullptr);
+        m_dpiScale = hdc ? (float)GetDeviceCaps(hdc, LOGPIXELSX) / 96.f : 1.0f;
+        if (hdc) ReleaseDC(nullptr, hdc);
+    }
 
     float w = 240.f * m_dpiScale;
     float h = 180.f * m_dpiScale;
@@ -121,10 +125,13 @@ LRESULT CALLBACK TimePickerPopup::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM
 
 LRESULT TimePickerPopup::HandleMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
-    case WM_PAINT:
+    case WM_PAINT: {
+        PAINTSTRUCT ps;
+        BeginPaint(hwnd, &ps);
         Render();
-        ValidateRect(hwnd, nullptr);
+        EndPaint(hwnd, &ps);
         return 0;
+    }
 
     case WM_MOUSEMOVE: {
         int x = GET_X_LPARAM(lp);
@@ -243,9 +250,14 @@ LRESULT TimePickerPopup::HandleMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
         RECT* newRect = reinterpret_cast<RECT*>(lp);
         
         m_dpiScale = newDpi / 96.0f;
+        int newW = newRect->right - newRect->left;
+        int newH = newRect->bottom - newRect->top;
         SetWindowPos(m_hwnd, nullptr, newRect->left, newRect->top,
-                     newRect->right - newRect->left, newRect->bottom - newRect->top,
+                     newW, newH,
                      SWP_NOZORDER | SWP_NOACTIVATE);
+        if (m_rt && newW > 0 && newH > 0) {
+            m_rt->Resize(D2D1::SizeU((UINT32)newW, (UINT32)newH));
+        }
 
         if (m_tfBig) { m_tfBig->Release(); m_tfBig = nullptr; }
         if (m_tfBtn) { m_tfBtn->Release(); m_tfBtn = nullptr; }

@@ -30,19 +30,21 @@ LRESULT WindowChrome::HitTest(HWND hwnd, int x, int y) {
     float th = ds::Dims::TitleBarH * m_dpiScale;
     float border = 4.0f * m_dpiScale;
 
-    // Resizing borders
-    if (pt.y < border) {
-        if (pt.x < border) return HTTOPLEFT;
-        if (pt.x > m_width - border) return HTTOPRIGHT;
-        return HTTOP;
+    if (!IsZoomed(hwnd)) {
+        // Resizing borders (disabled when maximized)
+        if (pt.y < border) {
+            if (pt.x < border) return HTTOPLEFT;
+            if (pt.x > m_width - border) return HTTOPRIGHT;
+            return HTTOP;
+        }
+        if (pt.y > m_height - border) {
+            if (pt.x < border) return HTBOTTOMLEFT;
+            if (pt.x > m_width - border) return HTBOTTOMRIGHT;
+            return HTBOTTOM;
+        }
+        if (pt.x < border) return HTLEFT;
+        if (pt.x > m_width - border) return HTRIGHT;
     }
-    if (pt.y > m_height - border) {
-        if (pt.x < border) return HTBOTTOMLEFT;
-        if (pt.x > m_width - border) return HTBOTTOMRIGHT;
-        return HTBOTTOM;
-    }
-    if (pt.x < border) return HTLEFT;
-    if (pt.x > m_width - border) return HTRIGHT;
 
     // Title bar area
     if (pt.y < th) {

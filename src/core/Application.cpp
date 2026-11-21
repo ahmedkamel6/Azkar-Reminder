@@ -4,6 +4,7 @@
 #include "Database.h"
 #include "ContentEngine.h"
 #include "Scheduler.h"
+#include "PlatformPaths.h"
 #include "ApplicationMetadata.h"
 #include "Localization.h"
 #include "../ui/MainWindow.h"
@@ -17,6 +18,7 @@
 #include <filesystem>
 #include <comdef.h>
 #include <taskschd.h>
+#include <dwrite_3.h>
 
 #pragma comment(lib, "taskschd.lib")
 #pragma comment(lib, "comsuppw.lib")
@@ -59,7 +61,7 @@ bool Application::Initialize(HINSTANCE hInstance) {
 
     // 3. Settings & Localization
     Settings::Instance().Load(m_appDataPath);
-    std::wstring lang = Settings::Instance().Get().language;
+    std::wstring lang = Settings::Instance().GetCopy().language;
     if (lang == L"system") {
         lang = (PRIMARYLANGID(GetUserDefaultUILanguage()) == LANG_ARABIC) ? L"ar" : L"en";
     }
@@ -121,49 +123,53 @@ bool Application::Initialize(HINSTANCE hInstance) {
     AudioEngine::Instance().Initialize(m_hInstance);
 
     // 8. Sync startup registry with settings
-    SetStartWithWindows(Settings::Instance().Get().startWithWindows);
+    SetStartWithWindows(Settings::Instance().GetCopy().startWithWindows);
 
     m_initialized = true;
     return true;
 }
 
 bool Application::InitAppDataPath() {
-    wchar_t* appData = nullptr;
-    if (FAILED(SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, nullptr, &appData))) {
-        return false;
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    fs::path dir = PlatformPaths::GetDataDir();
+    fs::create_directories(dir, ec);
+    if (ec) {
+        ec.clear();
+        dir = fs::temp_directory_path(ec) / L"Azkar Reminder";
+        fs::create_directories(dir, ec);
+        if (ec) return false;
     }
-    m_appDataPath = std::wstring(appData) + L"\\Azkar Reminder";
-    std::wstring oldPath = std::wstring(appData) + L"\\Dhikr Reminder";
-    CoTaskMemFree(appData);
 
-    // Create directory if needed
-    if (!CreateDirectoryW(m_appDataPath.c_str(), nullptr)) {
-        if (GetLastError() != ERROR_ALREADY_EXISTS) return false;
-    }
+    m_appDataPath = dir.wstring();
 
     // Auto-migrate settings/database/content from the legacy path ONLY if needed
-    // DO NOT migrate from executable path as it breaks installations
-    
-    std::wstring newDb = m_appDataPath + L"\\history.db";
-    std::wstring newSettings = m_appDataPath + L"\\settings.json";
-    std::wstring newContent = m_appDataPath + L"\\content.json";
+    wchar_t* appData = nullptr;
+    if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, nullptr, &appData))) {
+        std::wstring oldPath = std::wstring(appData) + L"\\Dhikr Reminder";
+        CoTaskMemFree(appData);
 
-    auto migrateFile = [](const std::wstring& oldFile, const std::wstring& newFile) {
-        if (GetFileAttributesW(newFile.c_str()) == INVALID_FILE_ATTRIBUTES &&
-            GetFileAttributesW(oldFile.c_str()) != INVALID_FILE_ATTRIBUTES) {
-            CopyFileW(oldFile.c_str(), newFile.c_str(), TRUE);
-            return true;
+        std::wstring newDb = m_appDataPath + L"\\history.db";
+        std::wstring newSettings = m_appDataPath + L"\\settings.json";
+        std::wstring newContent = m_appDataPath + L"\\content.json";
+
+        auto migrateFile = [](const std::wstring& oldFile, const std::wstring& newFile) {
+            if (GetFileAttributesW(newFile.c_str()) == INVALID_FILE_ATTRIBUTES &&
+                GetFileAttributesW(oldFile.c_str()) != INVALID_FILE_ATTRIBUTES) {
+                CopyFileW(oldFile.c_str(), newFile.c_str(), TRUE);
+                return true;
+            }
+            return false;
+        };
+
+        // Migrate database (older version used dhikr.db, new version expects history.db)
+        if (!migrateFile(oldPath + L"\\history.db", newDb)) {
+            migrateFile(oldPath + L"\\dhikr.db", newDb);
         }
-        return false;
-    };
 
-    // Migrate database (older version used dhikr.db, new version expects history.db)
-    if (!migrateFile(oldPath + L"\\history.db", newDb)) {
-        migrateFile(oldPath + L"\\dhikr.db", newDb);
+        migrateFile(oldPath + L"\\settings.json", newSettings);
+        migrateFile(oldPath + L"\\content.json", newContent);
     }
-    
-    migrateFile(oldPath + L"\\settings.json", newSettings);
-    migrateFile(oldPath + L"\\content.json", newContent);
 
     return true;
 }
@@ -186,17 +192,56 @@ bool Application::InitDirectX() {
         return false;
     }
 
+    // Register embedded Cairo font directly with DirectWrite (Windows 10 1703+)
+    IDWriteFactory5* dwf5 = nullptr;
+    if (SUCCEEDED(m_dwriteFactory->QueryInterface(__uuidof(IDWriteFactory5), reinterpret_cast<void**>(&dwf5))) && dwf5) {
+        HRSRC hFontRes = FindResourceW(m_hInstance, MAKEINTRESOURCEW(IDR_FONT_CAIRO), RT_RCDATA);
+        if (hFontRes) {
+            HGLOBAL hMem = LoadResource(m_hInstance, hFontRes);
+            if (hMem) {
+                const void* pData = LockResource(hMem);
+                DWORD size = SizeofResource(m_hInstance, hFontRes);
+                if (pData && size > 0 && SUCCEEDED(dwf5->CreateInMemoryFontFileLoader(&m_dwriteFontLoader)) && m_dwriteFontLoader) {
+                    if (SUCCEEDED(m_dwriteFactory->RegisterFontFileLoader(m_dwriteFontLoader))) {
+                        IDWriteFontFile* fontFile = nullptr;
+                        if (SUCCEEDED(m_dwriteFontLoader->CreateInMemoryFontFileReference(m_dwriteFactory, pData, size, nullptr, &fontFile)) && fontFile) {
+                            IDWriteFontSetBuilder1* fsBuilder = nullptr;
+                            if (SUCCEEDED(dwf5->CreateFontSetBuilder(&fsBuilder)) && fsBuilder) {
+                                if (SUCCEEDED(fsBuilder->AddFontFile(fontFile))) {
+                                    IDWriteFontSet* fontSet = nullptr;
+                                    if (SUCCEEDED(fsBuilder->CreateFontSet(&fontSet)) && fontSet) {
+                                        IDWriteFontCollection1* fc1 = nullptr;
+                                        if (SUCCEEDED(dwf5->CreateFontCollectionFromFontSet(fontSet, &fc1)) && fc1) {
+                                            m_cairoFontCollection = fc1;
+                                            LOG_INFO("Cairo font registered in DirectWrite in-memory collection");
+                                        }
+                                        fontSet->Release();
+                                    }
+                                }
+                                fsBuilder->Release();
+                            }
+                            fontFile->Release();
+                        }
+                    }
+                }
+            }
+        }
+        dwf5->Release();
+    }
+
     return true;
 }
 
 int Application::Run() {
-    auto& settings = Settings::Instance().Get();
+    auto settingsCopy = Settings::Instance().GetCopy();
 
     // Show onboarding on first launch
-    if (settings.firstLaunch) {
+    if (settingsCopy.firstLaunch) {
         OnboardingFlow onboarding;
         onboarding.Show(m_hInstance);
-        settings.firstLaunch = false;
+        Settings::Instance().Modify([](AppSettings& s) {
+            s.firstLaunch = false;
+        });
         Settings::Instance().Save();
     }
 
@@ -213,9 +258,6 @@ int Application::Run() {
     bool startBackground = (wcsstr(GetCommandLineW(), L"--background") != nullptr);
     if (!startBackground) {
         MainWindow::Instance().Show();
-    } else {
-        // App started silently in background tray — trim initial driver heap to drop working set to ~3 MB
-        SetProcessWorkingSetSize(GetCurrentProcess(), (SIZE_T)-1, (SIZE_T)-1);
     }
 
     // Create tray icon (and start retry timer if Shell is not ready yet)
@@ -243,8 +285,7 @@ int Application::Run() {
 }
 
 void Application::Shutdown() {
-    if (m_shuttingDown) return;
-    m_shuttingDown = true;
+    if (m_shuttingDown.exchange(true)) return;
 
     LOG_INFO("Application shutting down");
 
@@ -258,6 +299,12 @@ void Application::Shutdown() {
 
     Settings::Instance().Save();
 
+    if (m_cairoFontCollection) { m_cairoFontCollection->Release(); m_cairoFontCollection = nullptr; }
+    if (m_dwriteFontLoader) {
+        if (m_dwriteFactory) m_dwriteFactory->UnregisterFontFileLoader(m_dwriteFontLoader);
+        m_dwriteFontLoader->Release();
+        m_dwriteFontLoader = nullptr;
+    }
     if (m_dwriteFactory) { m_dwriteFactory->Release(); m_dwriteFactory = nullptr; }
     if (m_d2dFactory)    { m_d2dFactory->Release();    m_d2dFactory    = nullptr; }
 

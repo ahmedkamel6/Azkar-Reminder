@@ -180,12 +180,14 @@ ContentLoadResult ContentEngine::LoadFromMarkdownResource(HINSTANCE hInstance, i
     }
     HGLOBAL hData = LoadResource(hInstance, hRes);
     if (!hData) {
+        std::lock_guard<std::mutex> lock(m_mutex);
         m_lastError = L"Embedded content resource failed to load";
         return ContentLoadResult::FileNotFound;
     }
     const char* pBuf = reinterpret_cast<const char*>(LockResource(hData));
     DWORD sz = SizeofResource(hInstance, hRes);
     if (!pBuf || sz == 0) {
+        std::lock_guard<std::mutex> lock(m_mutex);
         m_lastError = L"Embedded content resource is empty";
         return ContentLoadResult::EmptyContent;
     }
@@ -194,9 +196,9 @@ ContentLoadResult ContentEngine::LoadFromMarkdownResource(HINSTANCE hInstance, i
 }
 #endif
 
-ContentLoadResult ContentEngine::LoadFromMarkdownString(const std::string& markdownText) {
-    std::lock_guard<std::mutex> lock(m_mutex);
-
+ContentLoadResult ContentEngine::ParseMarkdownString(const std::string& markdownText,
+                                                     std::vector<ContentItem>& out,
+                                                     std::wstring& errorOut) {
     std::istringstream stream(markdownText);
     std::string line;
     std::vector<ContentItem> items;
@@ -230,17 +232,15 @@ ContentLoadResult ContentEngine::LoadFromMarkdownString(const std::string& markd
 
         // Check for list item (e.g. 1. text or - text or * text)
         size_t textStart = std::string::npos;
-        std::string idPrefix = "";
 
         size_t dotPos = line.find(". ");
         if (dotPos != std::string::npos && dotPos > 0) {
             bool isNum = true;
             for (size_t i = 0; i < dotPos; ++i) {
-                if (!isdigit(line[i])) { isNum = false; break; }
+                if (!isdigit(static_cast<unsigned char>(line[i]))) { isNum = false; break; }
             }
             if (isNum) {
                 textStart = dotPos + 2;
-                idPrefix = line.substr(0, dotPos);
             }
         }
 
@@ -260,8 +260,23 @@ ContentLoadResult ContentEngine::LoadFromMarkdownString(const std::string& markd
     }
 
     if (items.empty()) {
-        m_lastError = L"No valid content found in markdown data";
+        errorOut = L"No valid content found in markdown data";
         return ContentLoadResult::EmptyContent;
+    }
+
+    out = std::move(items);
+    return ContentLoadResult::Success;
+}
+
+ContentLoadResult ContentEngine::LoadFromMarkdownString(const std::string& markdownText) {
+    std::vector<ContentItem> items;
+    std::wstring error;
+    ContentLoadResult res = ParseMarkdownString(markdownText, items, error);
+
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (res != ContentLoadResult::Success) {
+        m_lastError = error;
+        return res;
     }
 
     m_items = std::move(items);
@@ -276,9 +291,13 @@ ContentLoadResult ContentEngine::LoadFromMarkdownString(const std::string& markd
 }
 
 ContentLoadResult ContentEngine::LoadFromMarkdownFile(const std::filesystem::path& filePath) {
-    m_lastFilePath = filePath;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_lastFilePath = filePath;
+    }
     std::ifstream f(filePath, std::ios::binary);
     if (!f.is_open()) {
+        std::lock_guard<std::mutex> lock(m_mutex);
         m_lastError = L"Content file not found";
         return ContentLoadResult::FileNotFound;
     }
@@ -287,8 +306,13 @@ ContentLoadResult ContentEngine::LoadFromMarkdownFile(const std::filesystem::pat
 }
 
 ContentLoadResult ContentEngine::Reload() {
-    if (m_lastFilePath.empty()) return LoadFromResource();
-    return Load(m_lastFilePath);
+    std::filesystem::path pathCopy;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        pathCopy = m_lastFilePath;
+    }
+    if (pathCopy.empty()) return LoadFromResource();
+    return Load(pathCopy);
 }
 
 void ContentEngine::Save() {
@@ -335,11 +359,148 @@ void ContentEngine::Save() {
     }
 }
 
+bool ContentEngine::BackupSavedContentLocked() const {
+    const auto& target = m_savePath.empty() ? m_lastFilePath : m_savePath;
+    if (target.empty()) return false;
+
+    std::error_code ec;
+    if (!std::filesystem::exists(target, ec) || ec) return false;
+
+    auto bakPath = target;
+    bakPath += ".bak";
+    std::filesystem::copy_file(target, bakPath, std::filesystem::copy_options::overwrite_existing, ec);
+    return !ec;
+}
+
+bool ContentEngine::BackupSavedContent() {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return BackupSavedContentLocked();
+}
+
+static std::wstring NormalizeText(const std::wstring& s) {
+    size_t start = 0;
+    while (start < s.size() && (s[start] == L' ' || s[start] == L'\t' || s[start] == L'\r' || s[start] == L'\n')) {
+        ++start;
+    }
+    size_t end = s.size();
+    while (end > start && (s[end - 1] == L' ' || s[end - 1] == L'\t' || s[end - 1] == L'\r' || s[end - 1] == L'\n')) {
+        --end;
+    }
+    return s.substr(start, end - start);
+}
+
+ContentLoadResult ContentEngine::ImportMerge(const std::filesystem::path& filePath) {
+    bool isMarkdown = (filePath.extension() == ".md" || filePath.extension() == ".MD");
+    if (isMarkdown) {
+        std::ifstream peekF(filePath, std::ios::binary);
+        if (peekF.is_open()) {
+            char bom[3] = {};
+            peekF.read(bom, 3);
+            if (!(bom[0] == '\xEF' && bom[1] == '\xBB' && bom[2] == '\xBF')) {
+                peekF.seekg(0);
+            }
+            char firstChar = 0;
+            while (peekF.get(firstChar)) {
+                if (!isspace(static_cast<unsigned char>(firstChar))) break;
+            }
+            if (firstChar == '[' || firstChar == '{') {
+                isMarkdown = false;
+            }
+        }
+    }
+
+    std::vector<ContentItem> incoming;
+    std::wstring error;
+    ContentLoadResult res = ContentLoadResult::FileNotFound;
+
+    if (isMarkdown) {
+        std::ifstream f(filePath, std::ios::binary);
+        if (!f.is_open()) {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            m_lastError = L"Content file not found";
+            return ContentLoadResult::FileNotFound;
+        }
+        std::string str((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+        res = ParseMarkdownString(str, incoming, error);
+    } else {
+        res = ParseAndValidate(filePath, incoming, error);
+    }
+
+    if (res != ContentLoadResult::Success) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_lastError = error;
+        return res;
+    }
+
+    size_t addedCount = 0;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        BackupSavedContentLocked();
+
+        std::set<std::string> existingIds;
+        std::set<std::wstring> existingTexts;
+        for (const auto& item : m_items) {
+            if (!item.id.empty()) existingIds.insert(item.id);
+            std::wstring norm = NormalizeText(item.text);
+            if (!norm.empty()) existingTexts.insert(std::move(norm));
+        }
+
+        for (auto& item : incoming) {
+            std::wstring norm = NormalizeText(item.text);
+            if (norm.empty()) continue;
+            if ((!item.id.empty() && existingIds.count(item.id)) || existingTexts.count(norm)) {
+                continue;
+            }
+            if (!item.id.empty()) existingIds.insert(item.id);
+            existingTexts.insert(std::move(norm));
+            m_items.push_back(std::move(item));
+            ++addedCount;
+        }
+        m_lastError.clear();
+    }
+
+    if (addedCount > 0) {
+        Save();
+    }
+    LOG_INFO("ContentEngine::ImportMerge added " + std::to_string(addedCount) + " new items");
+    return ContentLoadResult::Success;
+}
+
+std::vector<ContentItem> ContentEngine::GetAllItems() const {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_items;
+}
+
+std::vector<ContentItem> ContentEngine::GetItems() const {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_items;
+}
+
+size_t ContentEngine::Count() const {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_items.size();
+}
+
+bool ContentEngine::IsEmpty() const {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_items.empty();
+}
+
+void ContentEngine::SetSavePath(const std::filesystem::path& path) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_savePath = path;
+}
+
+std::wstring ContentEngine::LastError() const {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_lastError;
+}
+
 void ContentEngine::AddItem(const ContentItem& item) {
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         m_items.insert(m_items.begin(), item);
-        m_current = nullptr;
+        m_currentId.clear();
     }
     Save();
 }
@@ -348,8 +509,8 @@ bool ContentEngine::DeleteItem(size_t index) {
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         if (index >= m_items.size()) return false;
+        if (m_items[index].id == m_currentId) m_currentId.clear();
         m_items.erase(m_items.begin() + index);
-        m_current = nullptr;
     }
     Save();
     return true;
@@ -362,8 +523,8 @@ bool ContentEngine::DeleteItemById(const std::string& id) {
             return item.id == id;
         });
         if (it == m_items.end()) return false;
+        if (m_currentId == id) m_currentId.clear();
         m_items.erase(it);
-        m_current = nullptr;
     }
     Save();
     return true;
@@ -383,23 +544,24 @@ void ContentEngine::ClearAll() {
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         m_items.clear();
-        m_current = nullptr;
+        m_currentId.clear();
         m_recentIds.clear();
     }
     Save();
 }
 
-const ContentItem* ContentEngine::GetNextPreview() const {
+std::optional<ContentItem> ContentEngine::GetNextPreview() const {
     std::lock_guard<std::mutex> lock(m_mutex);
-    if (m_items.empty()) return nullptr;
-    // Check if m_current is valid (points inside m_items memory block)
-    if (m_current >= m_items.data() && m_current < (m_items.data() + m_items.size())) {
-        if (m_current->enabled) return m_current;
+    if (m_items.empty()) return std::nullopt;
+    if (!m_currentId.empty()) {
+        for (const auto& it : m_items) {
+            if (it.id == m_currentId && it.enabled) return it;
+        }
     }
     for (const auto& it : m_items) {
-        if (it.enabled) return &it;
+        if (it.enabled) return it;
     }
-    return &m_items[0];
+    return m_items[0];
 }
 
 ContentLoadResult ContentEngine::ParseAndValidate(const std::filesystem::path& filePath,
@@ -516,13 +678,11 @@ ContentLoadResult ContentEngine::ParseAndValidate(const std::filesystem::path& f
         if (entry.contains("enabled") && entry["enabled"].is_boolean())
             item.enabled = entry["enabled"].get<bool>();
 
-        if (item.enabled) {
-            items.push_back(std::move(item));
-        }
+        items.push_back(std::move(item));
     }
 
     if (items.empty()) {
-        errorOut = L"No valid enabled content items found";
+        errorOut = L"No valid content items found";
         return ContentLoadResult::EmptyContent;
     }
 
@@ -605,49 +765,59 @@ double ContentEngine::ComputeWeight(const ContentItem& item,
     return std::max(weight, 0.01); // never zero
 }
 
-const ContentItem* ContentEngine::GetNext() {
+std::optional<ContentItem> ContentEngine::GetNext() {
     std::lock_guard<std::mutex> lock(m_mutex);
-    if (m_items.empty()) return nullptr;
+    if (m_items.empty()) return std::nullopt;
 
-    // Build weights
-    std::vector<double> weights(m_items.size());
+    // Collect enabled items and compute weights
+    std::vector<size_t> enabledIndices;
+    std::vector<double> weights;
+    enabledIndices.reserve(m_items.size());
+    weights.reserve(m_items.size());
+
     for (size_t i = 0; i < m_items.size(); ++i) {
-        weights[i] = ComputeWeight(m_items[i], i);
+        if (!m_items[i].enabled) continue;
+        enabledIndices.push_back(i);
+        weights.push_back(ComputeWeight(m_items[i], i));
     }
+
+    if (enabledIndices.empty()) return std::nullopt;
 
     // Weighted random selection
     double total = std::accumulate(weights.begin(), weights.end(), 0.0);
+    if (total <= 1e-9) return std::nullopt;
+
     std::random_device rd;
     std::mt19937 rng(rd());
     std::uniform_real_distribution<double> dist(0.0, total);
     double pick = dist(rng);
 
-    size_t selected = 0;
+    size_t selectedIdx = enabledIndices[0];
     double cumulative = 0.0;
     for (size_t i = 0; i < weights.size(); ++i) {
         cumulative += weights[i];
         if (pick <= cumulative) {
-            selected = i;
+            selectedIdx = enabledIndices[i];
             break;
         }
     }
 
-    m_current = &m_items[selected];
+    m_currentId = m_items[selectedIdx].id;
 
     // Update history
-    m_recentIds.push_front(m_current->id);
+    m_recentIds.push_front(m_currentId);
     while (m_recentIds.size() > kHistoryWindow) m_recentIds.pop_back();
 
-    return m_current;
+    return m_items[selectedIdx];
 }
 
-const ContentItem* ContentEngine::GetCurrent() const {
+std::optional<ContentItem> ContentEngine::GetCurrent() const {
     std::lock_guard<std::mutex> lock(m_mutex);
-    if (m_items.empty()) return nullptr;
-    if (m_current >= m_items.data() && m_current < (m_items.data() + m_items.size())) {
-        return m_current;
+    if (m_items.empty() || m_currentId.empty()) return std::nullopt;
+    for (const auto& item : m_items) {
+        if (item.id == m_currentId) return item;
     }
-    return nullptr;
+    return std::nullopt;
 }
 
 std::vector<std::string> ContentEngine::GetCategories() const {

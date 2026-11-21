@@ -14,13 +14,13 @@ LibraryPage::LibraryPage() {
     auto* dwf = Application::Instance().DWriteFactory();
     if (!dwf) return;
     m_dwf = dwf;
-    HDC hdc = GetDC(nullptr);
-    m_dpiScale = (float)GetDeviceCaps(hdc, LOGPIXELSX) / 96.f;
-    ReleaseDC(nullptr, hdc);
+    m_dpiScale = MainWindow::Instance().GetDpiScale();
+    if (m_dpiScale <= 0.f) m_dpiScale = 1.f;
 
     const wchar_t* fontName = ds::Font::Arabic();
+    auto* fontCol = Application::Instance().CairoFontCollection();
     auto mk = [&](float sz, DWRITE_FONT_WEIGHT wt, const wchar_t* locale, IDWriteTextFormat** out) {
-        dwf->CreateTextFormat(fontName, nullptr, wt, DWRITE_FONT_STYLE_NORMAL,
+        dwf->CreateTextFormat(fontName, fontCol, wt, DWRITE_FONT_STYLE_NORMAL,
             DWRITE_FONT_STRETCH_NORMAL, sz * m_dpiScale, locale, out);
     };
     mk(ds::FontSize::PageTitle, DWRITE_FONT_WEIGHT_SEMI_BOLD, L"en-US", &m_tfTitle);
@@ -125,9 +125,9 @@ void LibraryPage::DrawFilterPills(ID2D1RenderTarget* rt, float x, float y, float
 }
 
 void LibraryPage::DrawContentItem(ID2D1RenderTarget* rt, float x, float& y, float w, size_t index, bool hovered) {
-    auto& items = ContentEngine::Instance().GetAllItems();
+    auto items = ContentEngine::Instance().GetAllItems();
     if (index >= items.size()) return;
-    auto& item = items[index];
+    const auto& item = items[index];
 
     float padX = ds::Space::M * m_dpiScale;
     float padY = ds::Space::S * m_dpiScale;
@@ -271,7 +271,7 @@ void LibraryPage::DrawAddModal(ID2D1RenderTarget* rt, const D2D1_RECT_F& bounds)
 }
 
 static std::vector<size_t> GetFilteredIndices(int filter) {
-    auto& allItems = ContentEngine::Instance().GetAllItems();
+    auto allItems = ContentEngine::Instance().GetAllItems();
     std::vector<size_t> filtered;
     filtered.reserve(allItems.size());
     for (size_t i = 0; i < allItems.size(); ++i) {
@@ -378,7 +378,7 @@ void LibraryPage::Draw(ID2D1RenderTarget* rt, const D2D1_RECT_F& bounds) {
     y += 38.f * m_dpiScale;
 
     // Filter items based on m_currentFilter
-    auto& allItems = ContentEngine::Instance().GetAllItems();
+    auto allItems = ContentEngine::Instance().GetAllItems();
     std::vector<size_t> filteredIndices = GetFilteredIndices(m_currentFilter);
 
     if (allItems.empty() || filteredIndices.empty()) {
@@ -428,7 +428,11 @@ bool LibraryPage::OnChar(wchar_t ch) {
 
     if (ch == L'\b') { // Backspace
         if (!m_inputDhikrText.empty()) {
+            wchar_t last = m_inputDhikrText.back();
             m_inputDhikrText.pop_back();
+            if (IS_LOW_SURROGATE(last) && !m_inputDhikrText.empty() && IS_HIGH_SURROGATE(m_inputDhikrText.back())) {
+                m_inputDhikrText.pop_back();
+            }
             return true;
         }
     } else if (ch >= 32) { // Printable characters
@@ -502,7 +506,7 @@ bool LibraryPage::OnLButtonDown(int x, int y) {
                 newItem.text = m_inputDhikrText;
                 newItem.category = "custom";
                 newItem.priority = 1;
-                newItem.repetitions = 1;
+                newItem.repetitions = m_selectedReps;
                 newItem.enabled = true;
                 ContentEngine::Instance().AddItem(newItem);
                 m_inputDhikrText.clear();
@@ -601,19 +605,36 @@ bool LibraryPage::OnLButtonDown(int x, int y) {
         ofn.nMaxFile = sizeof(szFile) / sizeof(wchar_t);
         ofn.lpstrFilter = L"All Supported Datasets (*.json;*.md;*.txt)\0*.json;*.md;*.txt\0JSON Datasets (*.json)\0*.json\0Markdown Files (*.md)\0*.md\0All Files (*.*)\0*.*\0";
         ofn.nFilterIndex = 1;
-        ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST;
+        ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_NOCHANGEDIR;
         
         if (GetOpenFileNameW(&ofn) == TRUE) {
-            ContentLoadResult result = ContentEngine::Instance().Load(ofn.lpstrFile);
+            HWND owner = Application::Instance().MainWindow();
+            int choice = MessageBoxW(
+                owner,
+                L"Do you want to MERGE the imported items with your existing custom dhikr?\n\n"
+                L"• Yes = Merge (keep existing items & add new ones)\n"
+                L"• No = Replace entire library (a .bak backup will be saved)\n"
+                L"• Cancel = Abort import",
+                L"Import Dhikr Library",
+                MB_YESNOCANCEL | MB_ICONQUESTION);
+
+            if (choice == IDCANCEL) {
+                return true;
+            }
+
+            ContentLoadResult result = (choice == IDYES)
+                ? ContentEngine::Instance().ImportMerge(ofn.lpstrFile)
+                : (ContentEngine::Instance().BackupSavedContent(), ContentEngine::Instance().Load(ofn.lpstrFile));
+
             if (result == ContentLoadResult::Success) {
                 ContentEngine::Instance().Save();
                 MainWindow::Instance().OnSettingsChanged();
                 MainWindow::Instance().Invalidate();
-                MessageBoxW(Application::Instance().MainWindow(),
+                MessageBoxW(owner,
                     Localization::Instance().Get(L"library.import_success").c_str(),
                     Localization::Instance().Get(L"library.title").c_str(), MB_OK | MB_ICONINFORMATION);
             } else {
-                MessageBoxW(Application::Instance().MainWindow(),
+                MessageBoxW(owner,
                     Localization::Instance().Get(L"library.import_error").c_str(),
                     Localization::Instance().Get(L"common.error").c_str(), MB_OK | MB_ICONERROR);
             }

@@ -17,6 +17,7 @@
 #include <vector>
 #include <dwmapi.h>
 #include <shlwapi.h>
+#include <windowsx.h>
 #pragma comment(lib, "dwmapi.lib")
 #pragma comment(lib, "shlwapi.lib")
 
@@ -175,10 +176,11 @@ bool PopupWindow::InitD2D() {
     m_d2dFactory->CreateDCRenderTarget(&props, &m_dcRenderTarget);
 
     const wchar_t* fontName = ds::Font::Arabic();
+    auto* fontCol = Application::Instance().CairoFontCollection();
 
     // Adaptive text formats (Cairo Arabic)
     m_dwriteFactory->CreateTextFormat(
-        fontName, nullptr,
+        fontName, fontCol,
         DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_FONT_STYLE_NORMAL,
         DWRITE_FONT_STRETCH_NORMAL,
         18.f * m_dpiScale,
@@ -191,7 +193,7 @@ bool PopupWindow::InitD2D() {
     }
 
     m_dwriteFactory->CreateTextFormat(
-        fontName, nullptr,
+        fontName, fontCol,
         DWRITE_FONT_WEIGHT_REGULAR, DWRITE_FONT_STYLE_NORMAL,
         DWRITE_FONT_STRETCH_NORMAL,
         15.f * m_dpiScale,
@@ -204,7 +206,7 @@ bool PopupWindow::InitD2D() {
     }
 
     m_dwriteFactory->CreateTextFormat(
-        fontName, nullptr,
+        fontName, fontCol,
         DWRITE_FONT_WEIGHT_REGULAR, DWRITE_FONT_STYLE_NORMAL,
         DWRITE_FONT_STRETCH_NORMAL,
         13.5f * m_dpiScale,
@@ -217,7 +219,7 @@ bool PopupWindow::InitD2D() {
     }
 
     m_dwriteFactory->CreateTextFormat(
-        fontName, nullptr,
+        fontName, fontCol,
         DWRITE_FONT_WEIGHT_REGULAR, DWRITE_FONT_STYLE_NORMAL,
         DWRITE_FONT_STRETCH_NORMAL,
         ds::FontSize::PopupMain * m_dpiScale,
@@ -231,7 +233,7 @@ bool PopupWindow::InitD2D() {
     }
 
     m_dwriteFactory->CreateTextFormat(
-        fontName, nullptr,
+        fontName, fontCol,
         DWRITE_FONT_WEIGHT_REGULAR, DWRITE_FONT_STYLE_NORMAL,
         DWRITE_FONT_STRETCH_NORMAL,
         ds::FontSize::PopupSub * m_dpiScale,
@@ -244,7 +246,7 @@ bool PopupWindow::InitD2D() {
     }
 
     m_dwriteFactory->CreateTextFormat(
-        fontName, nullptr,
+        fontName, fontCol,
         DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_FONT_STYLE_NORMAL,
         DWRITE_FONT_STRETCH_NORMAL,
         8.5f * m_dpiScale,
@@ -285,6 +287,7 @@ bool PopupWindow::InitD2D() {
 }
 
 void PopupWindow::ReleaseD2D() {
+    if (m_grainBitmap)         { m_grainBitmap->Release();         m_grainBitmap         = nullptr; }
     for (int i = 0; i < 6; ++i) {
         if (m_logoBitmaps[i]) { m_logoBitmaps[i]->Release(); m_logoBitmaps[i] = nullptr; }
     }
@@ -315,9 +318,9 @@ void PopupWindow::Show(const ContentItem* item, bool force) {
     m_item = &m_itemCopy;
     m_copyFeedback = false;
     m_currentCounter = 1;
-    m_targetCounter = (m_item && m_item->repetitions > 1) ? m_item->repetitions : 33;
+    m_targetCounter = (m_item && m_item->repetitions > 0) ? m_item->repetitions : 1;
 
-    const auto& s = Settings::Instance().Get();
+    const auto s = Settings::Instance().GetCopy();
     std::wstring measureText = m_item->text;
     if (!s.showTashkeel) {
         measureText = ds::StripArabicTashkeel(measureText);
@@ -499,7 +502,7 @@ std::vector<PopupWindow::MonitorInfo> PopupWindow::EnumerateMonitors() {
 
 // ── Position calculation ──────────────────────────────────────────────────────
 HMONITOR PopupWindow::GetTargetMonitor() {
-    auto& s = Settings::Instance().Get();
+    const auto s = Settings::Instance().GetCopy();
     auto monitors = EnumerateMonitors();
     if (monitors.empty()) {
         return MonitorFromWindow(nullptr, MONITOR_DEFAULTTOPRIMARY);
@@ -531,7 +534,7 @@ HMONITOR PopupWindow::GetTargetMonitor() {
 
 RECT PopupWindow::CalculatePositionForWorkArea(int w, int h, const RECT& work) {
     int margin = (int)(ds::Dims::PopupMargin * m_dpiScale);
-    auto& s = Settings::Instance().Get();
+    const auto s = Settings::Instance().GetCopy();
 
     int x, y;
     int pw = work.right  - work.left;
@@ -575,9 +578,9 @@ void PopupWindow::StartEnterAnim() {
     KillTimer(m_hwnd, TIMER_POPUP_AUTODISMISS);
     m_state = PopupAnimState::Entering;
     m_animT = 0.f;
-    m_animStart = GetTickCount();
+    m_animStart = GetTickCount64();
 
-    auto& s = Settings::Instance().Get();
+    const auto s = Settings::Instance().GetCopy();
     float speedMult = 1.0f;
     if (s.animationSpeed == AnimationSpeed::Cinematic) speedMult = 1.35f;
     else if (s.animationSpeed == AnimationSpeed::Snappy) speedMult = 0.65f;
@@ -603,9 +606,9 @@ void PopupWindow::StartExitAnim() {
     KillTimer(m_hwnd, TIMER_POPUP_ANIM_ENTER);
     m_state = PopupAnimState::Closing;
     m_animT = 0.f;
-    m_animStart = GetTickCount();
+    m_animStart = GetTickCount64();
 
-    auto& s = Settings::Instance().Get();
+    const auto s = Settings::Instance().GetCopy();
     float speedMult = 1.0f;
     if (s.animationSpeed == AnimationSpeed::Cinematic) speedMult = 1.35f;
     else if (s.animationSpeed == AnimationSpeed::Snappy) speedMult = 0.65f;
@@ -615,7 +618,7 @@ void PopupWindow::StartExitAnim() {
 }
 
 void PopupWindow::SetupAutoDismiss() {
-    int durationMs = Settings::Instance().Get().popupDurationSec * 1000;
+    int durationMs = Settings::Instance().GetCopy().popupDurationSec * 1000;
     SetTimer(m_hwnd, TIMER_POPUP_AUTODISMISS, durationMs, nullptr);
 }
 
@@ -630,7 +633,7 @@ void PopupWindow::Render(float animProgress) {
     bool entering = (m_state == PopupAnimState::Entering);
     bool exiting  = (m_state == PopupAnimState::Closing);
 
-    const auto& s = Settings::Instance().Get();
+    const auto s = Settings::Instance().GetCopy();
     bool animEnabled = s.animationEnabled;
 
     float alpha = 1.0f;
@@ -874,7 +877,14 @@ void PopupWindow::UpdateLayered(float alpha, float slideOffsetX, float slideOffs
     m_dcRenderTarget->SetTransform(D2D1::Matrix3x2F::Identity());
 
     HRESULT hrEnd = m_dcRenderTarget->EndDraw();
-    if (FAILED(hrEnd)) {
+    if (hrEnd == D2DERR_RECREATE_TARGET) {
+        LOG_WARN("Popup D2DERR_RECREATE_TARGET — recreating Direct2D resources");
+        ReleaseD2D();
+        if (InitD2D()) {
+            GenerateGrainBitmap();
+        }
+        return;
+    } else if (FAILED(hrEnd)) {
         LOG_WARN("Popup EndDraw failed: 0x" + std::to_string(hrEnd));
     }
 
@@ -890,7 +900,7 @@ void PopupWindow::UpdateLayered(float alpha, float slideOffsetX, float slideOffs
     }
 
     // Synchronize layered update across all connected monitors
-    if (Settings::Instance().Get().popupMonitor == PopupMonitor::All) {
+    if (Settings::Instance().GetCopy().popupMonitor == PopupMonitor::All) {
         for (size_t i = 0; i < m_secondaryPopups.size(); ++i) {
             const auto& sec = m_secondaryPopups[i];
             if (sec.hwnd && IsWindow(sec.hwnd)) {
@@ -914,7 +924,7 @@ void PopupWindow::UpdateLayered(float alpha, float slideOffsetX, float slideOffs
 void PopupWindow::DrawBackground(ID2D1RenderTarget* rt, float alpha, float sweepT) {
     if (!rt) return;
 
-    const auto& s = Settings::Instance().Get();
+    const auto s = Settings::Instance().GetCopy();
     float r = ds::Dims::PopupRadius * m_dpiScale;
     if (s.popupCorner == PopupCornerStyle::Squircle) {
         r = 8.f * m_dpiScale;
@@ -1098,7 +1108,7 @@ ID2D1Bitmap* PopupWindow::GetEffectiveLogo() const {
     if (ds::Accent::IsAppPaused()) {
         return m_logoDormantBitmap;
     }
-    int idx = std::clamp((int)Settings::Instance().Get().colorTheme, 0, 5);
+    int idx = std::clamp((int)Settings::Instance().GetCopy().colorTheme, 0, 5);
     return m_logoBitmaps[idx] ? m_logoBitmaps[idx] : m_logoBitmaps[0];
 }
 
@@ -1127,7 +1137,7 @@ void PopupWindow::DrawContent(ID2D1RenderTarget* rt, float alpha) {
     rt->CreateSolidColorBrush(textColor, &textBrush);
     if (!textBrush) return;
 
-    const auto& s = Settings::Instance().Get();
+    const auto s = Settings::Instance().GetCopy();
     std::wstring displayText = m_item->text;
     if (!s.showTashkeel) {
         displayText = ds::StripArabicTashkeel(displayText);
@@ -1200,9 +1210,51 @@ void PopupWindow::DrawContent(ID2D1RenderTarget* rt, float alpha) {
 }
 
 void PopupWindow::DrawCounterPill(ID2D1RenderTarget* rt, float alpha) {
-    (void)rt;
-    (void)alpha;
-    m_counterRect = { 0, 0, 0, 0 };
+    if (m_targetCounter <= 1) {
+        m_counterRect = { 0, 0, 0, 0 };
+        return;
+    }
+
+    float s = m_dpiScale;
+    float pillW = 54.f * s;
+    float pillH = 18.f * s;
+    float pillX = 12.f * s;
+    float pillY = (float)m_height - 8.f * s - pillH;
+
+    m_counterRect = {
+        (int)pillX, (int)pillY,
+        (int)(pillX + pillW), (int)(pillY + pillH)
+    };
+
+    ID2D1SolidColorBrush* brush = nullptr;
+    rt->CreateSolidColorBrush(ds::Rgba(0xFF, 0xFF, 0xFF, alpha * 0.12f), &brush);
+    if (!brush) return;
+
+    D2D1_ROUNDED_RECT rr = D2D1::RoundedRect(
+        D2D1::RectF(pillX, pillY, pillX + pillW, pillY + pillH),
+        pillH * 0.5f, pillH * 0.5f);
+    rt->FillRoundedRectangle(rr, brush);
+
+    float progress = std::min(1.0f, (float)m_currentCounter / (float)m_targetCounter);
+    if (progress > 0.f) {
+        auto fillCol = ds::Accent::Primary(alpha * 0.35f);
+        brush->SetColor(fillCol);
+        D2D1_ROUNDED_RECT fillRr = D2D1::RoundedRect(
+            D2D1::RectF(pillX, pillY, pillX + pillW * progress, pillY + pillH),
+            pillH * 0.5f, pillH * 0.5f);
+        rt->FillRoundedRectangle(fillRr, brush);
+    }
+
+    brush->SetColor(ds::Accent::Primary(alpha * 0.7f));
+    rt->DrawRoundedRectangle(rr, brush, 1.0f);
+
+    if (m_textFmtSmall) {
+        std::wstring label = std::to_wstring(m_currentCounter) + L" / " + std::to_wstring(m_targetCounter);
+        brush->SetColor(ds::Rgba(0xFF, 0xFF, 0xFF, alpha * 0.92f));
+        rt->DrawText(label.c_str(), (UINT32)label.size(), m_textFmtSmall,
+            D2D1::RectF(pillX, pillY, pillX + pillW, pillY + pillH), brush);
+    }
+    brush->Release();
 }
 
 void PopupWindow::DrawCloseButton(ID2D1RenderTarget* rt, float alpha) {
@@ -1312,7 +1364,7 @@ bool PopupWindow::HitTestCounter(int x, int y) const {
 // ── Timer handler ─────────────────────────────────────────────────────────────
 LRESULT PopupWindow::OnTimer(UINT_PTR timerId) {
     if (timerId == TIMER_POPUP_ANIM_ENTER) {
-        DWORD elapsed = GetTickCount() - m_animStart;
+        ULONGLONG elapsed = GetTickCount64() - m_animStart;
         float t = std::min(1.f, (float)elapsed / m_animDuration);
         Render(t);
         if (t >= 1.f) {
@@ -1326,7 +1378,7 @@ LRESULT PopupWindow::OnTimer(UINT_PTR timerId) {
             }
         }
     } else if (timerId == TIMER_POPUP_ANIM_EXIT) {
-        DWORD elapsed = GetTickCount() - m_animStart;
+        ULONGLONG elapsed = GetTickCount64() - m_animStart;
         float t = std::min(1.f, (float)elapsed / m_animDuration);
         Render(t);
         if (t >= 1.f) {
@@ -1334,11 +1386,6 @@ LRESULT PopupWindow::OnTimer(UINT_PTR timerId) {
             HideAll();
             m_state = PopupAnimState::Hidden;
             m_item  = nullptr;
-            // When popup finishes exiting and main window is hidden, trim working set
-            HWND hMain = MainWindow::Instance().GetHwnd();
-            if (!hMain || !IsWindowVisible(hMain)) {
-                SetProcessWorkingSetSize(GetCurrentProcess(), (SIZE_T)-1, (SIZE_T)-1);
-            }
         }
     } else if (timerId == TIMER_POPUP_AUTODISMISS) {
         KillTimer(m_hwnd, TIMER_POPUP_AUTODISMISS);
@@ -1349,10 +1396,11 @@ LRESULT PopupWindow::OnTimer(UINT_PTR timerId) {
 
 // ── Mouse handlers ────────────────────────────────────────────────────────────
 LRESULT PopupWindow::OnMouseMove(HWND hwnd, int x, int y) {
-    if (!m_mouseTracking) {
+    if (m_trackedHwnds.find(hwnd) == m_trackedHwnds.end()) {
         TRACKMOUSEEVENT tme{ sizeof(tme), TME_LEAVE, hwnd, 0 };
-        TrackMouseEvent(&tme);
-        m_mouseTracking = true;
+        if (TrackMouseEvent(&tme)) {
+            m_trackedHwnds.insert(hwnd);
+        }
     }
 
     bool wasHovering = m_hovering;
@@ -1365,12 +1413,14 @@ LRESULT PopupWindow::OnMouseMove(HWND hwnd, int x, int y) {
     return 0;
 }
 
-LRESULT PopupWindow::OnMouseLeave(HWND /*hwnd*/) {
-    m_hovering      = false;
-    m_mouseTracking = false;
-    // Resume auto-dismiss
-    SetupAutoDismiss();
-    Render(1.f);
+LRESULT PopupWindow::OnMouseLeave(HWND hwnd) {
+    m_trackedHwnds.erase(hwnd);
+    if (m_trackedHwnds.empty()) {
+        m_hovering = false;
+        // Resume auto-dismiss
+        SetupAutoDismiss();
+        Render(1.f);
+    }
     return 0;
 }
 
@@ -1396,6 +1446,7 @@ LRESULT PopupWindow::OnLButtonDown(HWND hwnd, int x, int y) {
         return 0;
     } else if (HitTestCopy(x, y)) {
         if (m_item && !m_item->text.empty()) {
+            bool copiedOk = false;
             if (OpenClipboard(hwnd)) {
                 EmptyClipboard();
                 size_t len = (m_item->text.size() + 1) * sizeof(wchar_t);
@@ -1405,13 +1456,21 @@ LRESULT PopupWindow::OnLButtonDown(HWND hwnd, int x, int y) {
                     if (pBuf) {
                         memcpy(pBuf, m_item->text.c_str(), len);
                         GlobalUnlock(hGlob);
-                        SetClipboardData(CF_UNICODETEXT, hGlob);
+                        if (SetClipboardData(CF_UNICODETEXT, hGlob)) {
+                            copiedOk = true;
+                        } else {
+                            GlobalFree(hGlob);
+                        }
+                    } else {
+                        GlobalFree(hGlob);
                     }
                 }
                 CloseClipboard();
             }
-            m_copyFeedback = true;
-            Render(1.f);
+            if (copiedOk) {
+                m_copyFeedback = true;
+                Render(1.f);
+            }
         }
         return 0;
     } else if (HitTestPause(x, y)) {
@@ -1450,9 +1509,9 @@ LRESULT CALLBACK PopupWindow::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 
     switch (msg) {
         case WM_TIMER:        return self->OnTimer((UINT_PTR)wp);
-        case WM_MOUSEMOVE:    return self->OnMouseMove(hwnd, LOWORD(lp), HIWORD(lp));
+        case WM_MOUSEMOVE:    return self->OnMouseMove(hwnd, GET_X_LPARAM(lp), GET_Y_LPARAM(lp));
         case WM_MOUSELEAVE:   return self->OnMouseLeave(hwnd);
-        case WM_LBUTTONDOWN:  return self->OnLButtonDown(hwnd, LOWORD(lp), HIWORD(lp));
+        case WM_LBUTTONDOWN:  return self->OnLButtonDown(hwnd, GET_X_LPARAM(lp), GET_Y_LPARAM(lp));
         case WM_SETCURSOR: {
             if (LOWORD(lp) == HTCLIENT) {
                 POINT pt;
@@ -1474,7 +1533,7 @@ LRESULT CALLBACK PopupWindow::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         case WM_DPICHANGED: {
             UINT newDpi = HIWORD(wp);
             RECT* newRect = reinterpret_cast<RECT*>(lp);
-            return self->OnDpiChanged(newDpi, newRect);
+            return self->OnDpiChanged(hwnd, newDpi, newRect);
         }
 
         default:
@@ -1483,23 +1542,18 @@ LRESULT CALLBACK PopupWindow::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     return 0;
 }
 
-LRESULT PopupWindow::OnDpiChanged(UINT newDpi, const RECT* newRect) {
-    m_dpiScale = newDpi / 96.0f;
-
-    SetWindowPos(m_hwnd, nullptr, newRect->left, newRect->top,
+LRESULT PopupWindow::OnDpiChanged(HWND hwnd, UINT newDpi, const RECT* newRect) {
+    SetWindowPos(hwnd, nullptr, newRect->left, newRect->top,
                  newRect->right - newRect->left, newRect->bottom - newRect->top,
                  SWP_NOZORDER | SWP_NOACTIVATE);
 
-    // Recreate text formats with new DPI
-    if (m_textFmtMainLarge) { m_textFmtMainLarge->Release(); m_textFmtMainLarge = nullptr; }
-    if (m_textFmtMainMedium) { m_textFmtMainMedium->Release(); m_textFmtMainMedium = nullptr; }
-    if (m_textFmtMainCompact) { m_textFmtMainCompact->Release(); m_textFmtMainCompact = nullptr; }
-    if (m_textFmtMain) { m_textFmtMain->Release(); m_textFmtMain = nullptr; }
-    if (m_textFmtSub) { m_textFmtSub->Release(); m_textFmtSub = nullptr; }
-    if (m_textFmtSmall) { m_textFmtSmall->Release(); m_textFmtSmall = nullptr; }
-
-    // This will skip factory creation but run format creation
-    InitD2D();
+    if (hwnd == m_hwnd) {
+        m_dpiScale = newDpi / 96.0f;
+        ReleaseD2D();
+        if (InitD2D()) {
+            GenerateGrainBitmap();
+        }
+    }
 
     return 0;
 }

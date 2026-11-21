@@ -124,7 +124,7 @@ bool TestContentEngine() {
     auto cats = ce.GetCategories();
     if (cats.size() != 2) return false;
 
-    const auto* nextItem = ce.GetNext();
+    const auto nextItem = ce.GetNext();
     if (!nextItem || nextItem->text.empty()) return false;
 
     return true;
@@ -135,8 +135,10 @@ bool TestScheduler() {
     auto& sched = dhikr::Scheduler::Instance();
 
     // Enable reminders in settings
-    dhikr::Settings::Instance().Get().remindersEnabled = true;
-    dhikr::Settings::Instance().Get().paused = false;
+    dhikr::Settings::Instance().Modify([](dhikr::AppSettings& s) {
+        s.remindersEnabled = true;
+        s.paused = false;
+    });
 
     bool triggered = false;
     sched.Start([&]() {
@@ -210,7 +212,7 @@ bool TestContentEngineCustomItems() {
     if (ce.Count() != initialCount + 1) return false;
 
     // Check preview and current
-    const auto* prev = ce.GetNextPreview();
+    const auto prev = ce.GetNextPreview();
     if (!prev) return false;
 
     // Toggle enabled
@@ -241,7 +243,7 @@ bool TestEmbeddedContentResource() {
     if (res != dhikr::ContentLoadResult::Success) return false;
     if (ce.Count() < 100) return false;
 
-    const auto* item = ce.GetNext();
+    const auto item = ce.GetNext();
     if (!item || item->text.empty()) return false;
 
     return true;

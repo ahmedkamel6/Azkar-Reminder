@@ -5,9 +5,12 @@
 #include <wincodec.h>
 #include <string>
 #include <memory>
+#include <unordered_set>
 #include "../core/ContentEngine.h"
 
 namespace dhikr {
+
+class ScreenshotExporter;
 
 // ── Popup animation state ─────────────────────────────────────────────────────
 enum class PopupAnimState { Hidden, Entering, Visible, Hovering, Closing };
@@ -48,6 +51,7 @@ public:
     PopupWindow& operator=(const PopupWindow&) = delete;
 
 private:
+    friend class ScreenshotExporter;
     PopupWindow() = default;
     ~PopupWindow();
 
@@ -81,7 +85,7 @@ private:
     LRESULT OnMouseLeave(HWND hwnd);
     LRESULT OnLButtonDown(HWND hwnd, int x, int y);
     LRESULT OnSetCursor(HWND hwnd, UINT hitTest, UINT message);
-    LRESULT OnDpiChanged(UINT newDpi, const RECT* newRect);
+    LRESULT OnDpiChanged(HWND hwnd, UINT newDpi, const RECT* newRect);
 
     // Helpers
     bool HitTestClose(int x, int y) const;
@@ -110,12 +114,12 @@ private:
 
     // Animation progress 0.0–1.0
     float             m_animT       = 0.f;
-    DWORD             m_animStart   = 0;
+    ULONGLONG         m_animStart   = 0;
     float             m_animDuration = 300.f;
 
     // Hover state
     bool              m_hovering    = false;
-    bool              m_mouseTracking = false;
+    std::unordered_set<HWND> m_trackedHwnds;
     float             m_hoverT      = 0.f;
 
     // Content

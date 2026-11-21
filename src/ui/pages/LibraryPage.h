@@ -16,6 +16,7 @@ public:
     float GetScrollY() const override { return m_scrollY; }
     void SetScrollY(float y) override { m_scrollY = y; m_targetScrollY = y; }
     bool OnScrollTick() override;
+    void ResetD2D() override { if (m_brush) { m_brush->Release(); m_brush = nullptr; } }
 private:
     void DrawContentItem(ID2D1RenderTarget* rt, float x, float& y, float w, size_t index, bool hovered);
     void DrawEmptyState(ID2D1RenderTarget* rt, const D2D1_RECT_F& bounds);

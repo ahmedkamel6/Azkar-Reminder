@@ -10,6 +10,7 @@
 
 namespace dhikr {
 
+class ScreenshotExporter;
 struct ContentItem;
 
 // ── Page abstract base ────────────────────────────────────────────────────────
@@ -32,6 +33,8 @@ public:
     virtual float GetScrollY() const { return 0.f; }
     virtual void SetScrollY(float y) {}
     virtual bool OnScrollTick() { return false; }
+    virtual void SetDpiScale(float dpi) {}
+    virtual void ResetD2D() {}
 };
 // ── MainWindow ────────────────────────────────────────────────────────────────
 // Primary application window: sidebar + content area.
@@ -52,6 +55,7 @@ public:
     void Invalidate() { InvalidateRect(m_hwnd, nullptr, FALSE); }
     void UpdateAppIcon(ColorTheme themeOverride = (ColorTheme)-1);
     ColorTheme GetTargetTheme() const { return m_targetTheme; }
+    float GetDpiScale() const { return m_dpiScale; }
 
     ID2D1Bitmap* GetLogoBitmap() const { return m_logoBitmaps[0]; }
     ID2D1Bitmap* GetLogoSmallBitmap() const { return m_logoSmallBitmaps[0]; }
@@ -73,6 +77,7 @@ public:
     MainWindow& operator=(const MainWindow&) = delete;
 
 private:
+    friend class ScreenshotExporter;
     MainWindow() = default;
     ~MainWindow();
 
@@ -163,7 +168,7 @@ private:
     static constexpr UINT_PTR TIMER_THEME_TRANSITION = 1005;
     ColorTheme              m_prevTheme          = ColorTheme::Green;
     ColorTheme              m_targetTheme        = ColorTheme::Green;
-    DWORD                   m_themeAnimStartTime = 0;
+    ULONGLONG               m_themeAnimStartTime = 0;
     float                   m_themeAnimDuration  = 350.0f; // 350ms smooth transition
 
     HICON                   m_hCurrentIconBig    = nullptr;

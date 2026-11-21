@@ -24,22 +24,35 @@ void Logger::Initialize(const std::filesystem::path& logDirectory) {
     } catch (...) {}
 
     // Find next available file index
+    std::error_code ec;
     for (int i = 0; i < kMaxFiles; ++i) {
-        auto path = m_logDir / ("dhikr_" + std::to_string(i) + ".log");
-        if (!fs::exists(path) || fs::file_size(path) < kMaxFileSize) {
-            m_fileIndex = i;
-            m_file.open(path, std::ios::app);
-            m_currentSize = fs::exists(path) ? (size_t)fs::file_size(path) : 0;
-            break;
+        try {
+            auto path = m_logDir / ("dhikr_" + std::to_string(i) + ".log");
+            bool exists = fs::exists(path, ec);
+            if (ec) { ec.clear(); continue; }
+            uintmax_t sz = exists ? fs::file_size(path, ec) : 0;
+            if (ec) { ec.clear(); continue; }
+            if (!exists || sz < kMaxFileSize) {
+                m_fileIndex = i;
+                m_file.open(path, std::ios::app);
+                if (m_file.is_open()) {
+                    m_currentSize = exists ? (size_t)sz : 0;
+                    break;
+                }
+            }
+        } catch (...) {
+            // Skip locked or inaccessible log file
         }
     }
 
     if (!m_file.is_open()) {
-        // All files full — overwrite oldest
-        m_fileIndex = 0;
-        auto path = m_logDir / "dhikr_0.log";
-        m_file.open(path, std::ios::trunc);
-        m_currentSize = 0;
+        // All files full or locked — overwrite oldest
+        try {
+            m_fileIndex = 0;
+            auto path = m_logDir / "dhikr_0.log";
+            m_file.open(path, std::ios::trunc);
+            m_currentSize = 0;
+        } catch (...) {}
     }
 
     // Write startup marker

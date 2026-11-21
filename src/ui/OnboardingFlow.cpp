@@ -51,7 +51,7 @@ void OnboardingFlow::DrawPage(HWND hwnd, int page) {
     };
     static const wchar_t* kBodies[] = {
         L"This app quietly reminds you throughout the day to remember Allah.\n\nIt runs in the background and shows gentle popup reminders at intervals you choose.",
-        L"Azkar Reminder does not include any pre-written text.\n\nPlease provide your own content file (JSON format) created by the administrator.",
+        L"Azkar Reminder includes a built-in library of authentic dhikr.\n\nYou can also import your own custom JSON content file below if you wish.",
         L"Set the times you'd like to receive reminders. You can always change these in Settings.",
         L"Azkar Reminder is ready. It will start with Windows and remind you quietly throughout the day.\n\nMay Allah accept this effort."
     };
@@ -64,7 +64,7 @@ void OnboardingFlow::DrawPage(HWND hwnd, int page) {
     ShowWindow(GetDlgItem(hwnd, IDC_ONBOARD_BACK),   page > 0  ? SW_SHOW : SW_HIDE);
 
     // Last page: change "Next" to "Finish"
-    SetDlgItemTextW(hwnd, IDC_ONBOARD_NEXT, page == 3 ? L"Finish" : L"Next →");
+    SetDlgItemTextW(hwnd, IDC_ONBOARD_NEXT, page == 3 ? L"Finish" : L"Next \u2192");
 }
 
 void OnboardingFlow::OnNext(HWND hwnd) {
@@ -91,7 +91,7 @@ void OnboardingFlow::OnBrowseContent(HWND hwnd) {
     ofn.lpstrFilter = L"JSON Files (*.json)\0*.json\0All Files (*.*)\0*.*\0";
     ofn.lpstrFile   = path;
     ofn.nMaxFile    = MAX_PATH;
-    ofn.Flags       = OFN_FILEMUSTEXIST;
+    ofn.Flags       = OFN_FILEMUSTEXIST | OFN_NOCHANGEDIR;
 
     if (GetOpenFileNameW(&ofn)) {
         auto result = ContentEngine::Instance().Load(path);

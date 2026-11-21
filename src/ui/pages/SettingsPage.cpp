@@ -21,16 +21,16 @@ SettingsPage::SettingsPage() {
     auto* dwf = Application::Instance().DWriteFactory();
     if (!dwf) return;
     m_dwf = dwf;
-    HDC hdc = GetDC(nullptr);
-    m_dpiScale = (float)GetDeviceCaps(hdc, LOGPIXELSX) / 96.f;
-    ReleaseDC(nullptr, hdc);
+    m_dpiScale = MainWindow::Instance().GetDpiScale();
+    if (m_dpiScale <= 0.f) m_dpiScale = 1.f;
 
     bool isRtl = Localization::Instance().IsRTL();
     const wchar_t* fontName = ds::Font::Arabic();
     const wchar_t* locale   = isRtl ? L"ar-SA" : L"en-US";
+    auto* fontCol = Application::Instance().CairoFontCollection();
 
     auto mk = [&](float sz, DWRITE_FONT_WEIGHT wt, IDWriteTextFormat** out) {
-        dwf->CreateTextFormat(fontName, nullptr, wt, DWRITE_FONT_STYLE_NORMAL,
+        dwf->CreateTextFormat(fontName, fontCol, wt, DWRITE_FONT_STYLE_NORMAL,
             DWRITE_FONT_STRETCH_NORMAL, sz * m_dpiScale, locale, out);
     };
     mk(ds::FontSize::PageTitle, DWRITE_FONT_WEIGHT_SEMI_BOLD, &m_tfTitle);
@@ -1499,7 +1499,7 @@ bool SettingsPage::OnLButtonDown(int x, int y) {
         int res = MessageBoxW(Application::Instance().MainWindow(), msg.c_str(), title.c_str(), MB_YESNO | MB_ICONWARNING);
         if (res == IDYES) {
             AppSettings def;
-            def.language = Settings::Instance().Get().language; // preserve language
+            def.language = Settings::Instance().GetCopy().language; // preserve language
             Settings::Instance().Update(def);
             Settings::Instance().Save();
             m_pendingSettings = def;

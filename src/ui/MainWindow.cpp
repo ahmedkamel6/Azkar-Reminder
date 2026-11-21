@@ -4,7 +4,6 @@
 #include "PopupWindow.h"
 #include "core/LogoRenderer.h"
 #include "core/ResourceLoader.h"
-#include "core/WindowChrome.h"
 #include "pages/HomePage.h"
 #include "pages/RemindersPage.h"
 #include "pages/LibraryPage.h"
@@ -104,7 +103,7 @@ void MainWindow::RegisterClass(HINSTANCE hInstance) {
         bigResId = IDI_APP_DORMANT_ICON;
         smallResId = IDI_APP_DORMANT_SMALL;
     } else {
-        switch (Settings::Instance().Get().colorTheme) {
+        switch (Settings::Instance().GetCopy().colorTheme) {
             case ColorTheme::Yellow: bigResId = IDI_APP_YELLOW_ICON; smallResId = IDI_APP_YELLOW_SMALL; break;
             case ColorTheme::Blue:   bigResId = IDI_APP_BLUE_ICON;   smallResId = IDI_APP_BLUE_SMALL;   break;
             case ColorTheme::Red:    bigResId = IDI_APP_RED_ICON;    smallResId = IDI_APP_RED_SMALL;    break;
@@ -125,8 +124,8 @@ void MainWindow::RegisterClass(HINSTANCE hInstance) {
 }
 
 bool MainWindow::CreateWindow_(HINSTANCE hInstance) {
-    // Standard framed window style with native Windows caption, system menu, and minimize box
-    DWORD style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
+    // Standard framed window style with native Windows caption, system menu, minimize, maximize, and sizing frame
+    DWORD style = WS_OVERLAPPEDWINDOW;
 
     RECT rc = { 0, 0, m_width, m_height };
     AdjustWindowRectEx(&rc, style, FALSE, WS_EX_APPWINDOW);
@@ -154,7 +153,7 @@ bool MainWindow::CreateWindow_(HINSTANCE hInstance) {
             m_height = (int)(560.f * m_dpiScale);
 
             RECT rcDpi = { 0, 0, m_width, m_height };
-            AdjustWindowRectEx(&rcDpi, style, FALSE, WS_EX_APPWINDOW);
+            AdjustWindowRectExForDpi(&rcDpi, style, FALSE, WS_EX_APPWINDOW, dpi);
             winW = rcDpi.right - rcDpi.left;
             winH = rcDpi.bottom - rcDpi.top;
 
@@ -275,7 +274,7 @@ bool MainWindow::InitTextFormats() {
     auto tryCreateFormat = [&](IDWriteTextFormat** ppFmt,
                                 DWRITE_FONT_WEIGHT weight, float size) {
         HRESULT hr = m_dwriteFactory->CreateTextFormat(
-            L"Cairo", nullptr, weight,
+            L"Cairo", Application::Instance().CairoFontCollection(), weight,
             DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
             size * m_dpiScale, L"en-US", ppFmt);
         if (FAILED(hr) || !*ppFmt) {
@@ -319,6 +318,9 @@ void MainWindow::InitPages(HINSTANCE hInstance) {
 }
 
 void MainWindow::ReleaseD2D() {
+    for (auto& p : m_pages) {
+        if (p) p->ResetD2D();
+    }
     if (m_logoDormantSmallBitmap) { m_logoDormantSmallBitmap->Release(); m_logoDormantSmallBitmap = nullptr; }
     if (m_logoDormantBitmap)      { m_logoDormantBitmap->Release();      m_logoDormantBitmap      = nullptr; }
     for (int i = 0; i < 6; ++i) {
@@ -342,8 +344,6 @@ void MainWindow::Show() {
 
 void MainWindow::Hide() {
     ShowWindow(m_hwnd, SW_HIDE);
-    // Trim working set pages when hidden to tray to minimize RAM usage to ~2.8-3.5 MB
-    SetProcessWorkingSetSize(GetCurrentProcess(), (SIZE_T)-1, (SIZE_T)-1);
 }
 
 void MainWindow::NavigateTo(int pageId) {
@@ -451,7 +451,7 @@ void MainWindow::DrawBackground(ID2D1RenderTarget* rt) {
         rt->FillRectangle(D2D1::RectF(0.0f, 0.0f, (float)m_width, (float)m_height), m_brush);
     }
 
-    if (Settings::Instance().Get().arabesqueOverlay) {
+    if (Settings::Instance().GetCopy().arabesqueOverlay) {
         ds::Arabesque::DrawLattice(rt, D2D1::RectF(0.0f, 0.0f, (float)m_width, (float)m_height), 0.025f);
     }
 }
@@ -574,7 +574,7 @@ ID2D1Bitmap* MainWindow::GetEffectiveLogo(bool isSmall) const {
         }
         return m_logoDormantBitmap ? m_logoDormantBitmap : m_logoDormantSmallBitmap;
     }
-    return GetThemeLogo(Settings::Instance().Get().colorTheme, isSmall);
+    return GetThemeLogo(Settings::Instance().GetCopy().colorTheme, isSmall);
 }
 
 void MainWindow::DrawEffectiveLogo(ID2D1RenderTarget* rt, const D2D1_RECT_F& dest, bool isSmall, float alpha) const {
@@ -655,6 +655,7 @@ void MainWindow::DrawCurrentPage(ID2D1RenderTarget* rt) {
 
 // ── Message handlers ──────────────────────────────────────────────────────────
 LRESULT MainWindow::OnSize(int w, int h) {
+    if (w == 0 || h == 0) return 0;
     m_width  = w;
     m_height = h;
     if (m_renderTarget) {
@@ -668,7 +669,10 @@ LRESULT MainWindow::OnSize(int w, int h) {
     
     auto cr = ContentRect();
     for (auto& p : m_pages) {
-        if (p) p->OnSize(cr);
+        if (p) {
+            p->SetDpiScale(m_dpiScale);
+            p->OnSize(cr);
+        }
     }
     return 0;
 }
@@ -693,8 +697,8 @@ LRESULT MainWindow::OnCommand(WPARAM wp) {
             break;
         case ID_TRAY_NEXT: {
             // Show next reminder immediately
-            auto* item = ContentEngine::Instance().GetNext();
-            if (item) PopupWindow::Instance().Show(item);
+            auto item = ContentEngine::Instance().GetNext();
+            if (item) PopupWindow::Instance().Show(&*item);
             break;
         }
     }
@@ -703,9 +707,9 @@ LRESULT MainWindow::OnCommand(WPARAM wp) {
 
 LRESULT MainWindow::OnReminder(bool forcePreview) {
     if (forcePreview) {
-        auto* item = ContentEngine::Instance().GetNext();
+        auto item = ContentEngine::Instance().GetNext();
         if (item) {
-            PopupWindow::Instance().Show(item, true /* force */);
+            PopupWindow::Instance().Show(&*item, true /* force */);
         }
         return 0;
     }
@@ -713,20 +717,22 @@ LRESULT MainWindow::OnReminder(bool forcePreview) {
     if (PopupWindow::Instance().IsVisible()) {
         return 0;
     }
-    auto* item = ContentEngine::Instance().GetNext();
+    auto item = ContentEngine::Instance().GetNext();
     if (item) {
         // Fullscreen distraction protection check
-        if (Settings::Instance().Get().suppressDuringFullscreen && FullScreenDetector::Instance().IsFullScreenActive()) {
+        auto settingsSnap = Settings::Instance().GetCopy();
+        if (settingsSnap.suppressDuringFullscreen && FullScreenDetector::Instance().IsFullScreenActive()) {
             HWND fg = GetForegroundWindow();
             wchar_t fgTitle[128] = { 0 };
             wchar_t fgClass[64]  = { 0 };
             if (fg) {
-                GetWindowTextW(fg, fgTitle, 128);
+                SendMessageTimeoutW(fg, WM_GETTEXT, 128, reinterpret_cast<LPARAM>(fgTitle),
+                                    SMTO_ABORTIFHUNG | SMTO_BLOCK, 100, nullptr);
                 GetClassNameW(fg, fgClass, 64);
             }
             std::string fgInfo = "FG: '" + WStringToUtf8(fgTitle) + "' [" + WStringToUtf8(fgClass) + "]";
 
-            int mode = Settings::Instance().Get().fullscreenSuppressionMode;
+            int mode = settingsSnap.fullscreenSuppressionMode;
             if (mode == 2) {
                 // Windows notification only
                 LOG_INFO("[FULLSCREEN] Fullscreen active (" + fgInfo + ") — delivering via quiet notification");
@@ -745,7 +751,7 @@ LRESULT MainWindow::OnReminder(bool forcePreview) {
             }
         }
 
-        PopupWindow::Instance().Show(item);
+        PopupWindow::Instance().Show(&*item);
         // Update tray tooltip
         time_t next = Scheduler::Instance().GetNextReminderTime();
         if (next > 0) {
@@ -773,7 +779,7 @@ void MainWindow::UpdateAppIcon(ColorTheme themeOverride) {
     int smallResId = IDI_APP_ICON_SMALL;
 
     ColorTheme activeTheme = (themeOverride != static_cast<ColorTheme>(-1)) ? themeOverride
-        : (ds::Accent::IsTransitioning() ? m_targetTheme : Settings::Instance().Get().colorTheme);
+        : (ds::Accent::IsTransitioning() ? m_targetTheme : Settings::Instance().GetCopy().colorTheme);
 
     if (ds::Accent::IsAppPaused()) {
         bigResId = IDI_APP_DORMANT_ICON;
@@ -819,12 +825,12 @@ inline float EaseInOutCubic(float t) {
 }
 
 void MainWindow::TransitionToTheme(ColorTheme newTheme) {
-    ColorTheme oldTheme = Settings::Instance().Get().colorTheme;
+    ColorTheme oldTheme = Settings::Instance().GetCopy().colorTheme;
     if (oldTheme == newTheme && !ds::Accent::IsTransitioning()) return;
 
     m_prevTheme = ds::Accent::IsTransitioning() ? ds::Accent::ToTheme() : oldTheme;
     m_targetTheme = newTheme;
-    m_themeAnimStartTime = GetTickCount();
+    m_themeAnimStartTime = GetTickCount64();
     m_themeAnimDuration = 350.0f;
 
     ds::Accent::StartTransition(m_prevTheme, m_targetTheme);
@@ -875,7 +881,7 @@ LRESULT MainWindow::OnSettingsChanged() {
 
 LRESULT MainWindow::OnTimer(UINT_PTR timerId) {
     if (timerId == TIMER_THEME_TRANSITION) {
-        DWORD elapsed = GetTickCount() - m_themeAnimStartTime;
+        ULONGLONG elapsed = GetTickCount64() - m_themeAnimStartTime;
         float t = std::min(1.0f, (float)elapsed / m_themeAnimDuration);
         float eased = EaseInOutCubic(t);
         ds::Accent::SetTransitionProgress(eased);
@@ -885,17 +891,18 @@ LRESULT MainWindow::OnTimer(UINT_PTR timerId) {
             KillTimer(m_hwnd, TIMER_THEME_TRANSITION);
             ds::Accent::EndTransition(m_targetTheme);
 
-            auto& s = Settings::Instance().Get();
-            s.colorTheme = m_targetTheme;
-            switch (m_targetTheme) {
-                case ColorTheme::Yellow: s.accentColor = { 0xFA, 0xCC, 0x15 }; break;
-                case ColorTheme::Blue:   s.accentColor = { 0x38, 0xBD, 0xF8 }; break;
-                case ColorTheme::Red:    s.accentColor = { 0xF8, 0x71, 0x71 }; break;
-                case ColorTheme::Silver: s.accentColor = { 0xE2, 0xE8, 0xF0 }; break;
-                case ColorTheme::Gold:   s.accentColor = { 0xF5, 0xBA, 0x22 }; break;
-                case ColorTheme::Green:
-                default:                 s.accentColor = { 0xB7, 0xF3, 0x4A }; break;
-            }
+            Settings::Instance().Modify([this](AppSettings& s) {
+                s.colorTheme = m_targetTheme;
+                switch (m_targetTheme) {
+                    case ColorTheme::Yellow: s.accentColor = { 0xFA, 0xCC, 0x15 }; break;
+                    case ColorTheme::Blue:   s.accentColor = { 0x38, 0xBD, 0xF8 }; break;
+                    case ColorTheme::Red:    s.accentColor = { 0xF8, 0x71, 0x71 }; break;
+                    case ColorTheme::Silver: s.accentColor = { 0xE2, 0xE8, 0xF0 }; break;
+                    case ColorTheme::Gold:   s.accentColor = { 0xF5, 0xBA, 0x22 }; break;
+                    case ColorTheme::Green:
+                    default:                 s.accentColor = { 0xB7, 0xF3, 0x4A }; break;
+                }
+            });
             Settings::Instance().Save();
 
             TrayIcon::Instance().UpdateIcon();
@@ -1057,8 +1064,6 @@ LRESULT MainWindow::OnTrayCallback(LPARAM lp) {
 LRESULT MainWindow::OnGetMinMaxInfo(MINMAXINFO* mmi) {
     mmi->ptMinTrackSize.x = (LONG)(ds::Dims::MainWindowMinW * m_dpiScale);
     mmi->ptMinTrackSize.y = (LONG)(ds::Dims::MainWindowMinH * m_dpiScale);
-    mmi->ptMaxTrackSize.x = (LONG)(ds::Dims::MainWindowW * 1.35f * m_dpiScale);
-    mmi->ptMaxTrackSize.y = (LONG)(ds::Dims::MainWindowH * 1.35f * m_dpiScale);
     return 0;
 }
 
@@ -1160,16 +1165,12 @@ LRESULT CALLBACK MainWindow::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
         case WM_NCPAINT:          return DefWindowProcW(hwnd, msg, wp, lp);
         case WM_NCACTIVATE:       return DefWindowProcW(hwnd, msg, wp, lp);
         case WM_NCHITTEST:        return DefWindowProcW(hwnd, msg, wp, lp);
-        case WM_NCLBUTTONDBLCLK:  return 0; // Disable maximize on title bar double click
-        case WM_SYSCOMMAND: {
-            if ((wp & 0xFFF0) == SC_MAXIMIZE) return 0; // Ignore maximize commands
-            if ((wp & 0xFFF0) == SC_MINIMIZE) {
-                LRESULT res = DefWindowProcW(hwnd, msg, wp, lp);
-                SetProcessWorkingSetSize(GetCurrentProcess(), (SIZE_T)-1, (SIZE_T)-1);
-                return res;
+        case WM_QUERYENDSESSION:  return TRUE;
+        case WM_ENDSESSION:
+            if (wp == TRUE) {
+                Application::Instance().Shutdown();
             }
-            return DefWindowProcW(hwnd, msg, wp, lp);
-        }
+            return 0;
         case WM_CLOSE:            return self->OnClose();
         case WM_DESTROY:          return self->OnDestroy();
         case WM_ERASEBKGND:       return 1; // prevent flicker
@@ -1217,9 +1218,21 @@ LRESULT MainWindow::OnDpiChanged(UINT newDpi, const RECT* newRect) {
         m_navRail->SetBounds(SidebarRect());
     }
 
+    float savedScroll = 0.f;
+    if (m_activePage >= 0 && m_activePage < kNavItems && m_pages[m_activePage]) {
+        savedScroll = m_pages[m_activePage]->GetScrollY();
+    }
+    InitPages(m_hInst);
+    if (m_activePage >= 0 && m_activePage < kNavItems && m_pages[m_activePage]) {
+        m_pages[m_activePage]->SetScrollY(savedScroll);
+    }
+
     auto cr = ContentRect();
     for (auto& p : m_pages) {
-        if (p) p->OnSize(cr);
+        if (p) {
+            p->SetDpiScale(m_dpiScale);
+            p->OnSize(cr);
+        }
     }
 
     InvalidateRect(m_hwnd, nullptr, FALSE);

@@ -1,7 +1,7 @@
 # build_msix.ps1 - Builds the official MSIX package for Microsoft Store & Windows 10/11
 [CmdletBinding()]
 param (
-    [string]$Version = "1.2.4",
+    [string]$Version = "1.2.5",
     [string]$Publisher = "CN=BD257909-6037-4C23-A6F3-A71B4BD2AF69",
     [string]$PublisherDisplayName = "Ahmedkamel",
     [string]$PackageName = "15145Ahmedkamel.AzkarReminder",

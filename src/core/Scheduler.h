@@ -6,6 +6,7 @@
 #include <condition_variable>
 #include <chrono>
 #include <ctime>
+#include <cstdint>
 #include "Settings.h"
 
 #ifdef _WIN32
@@ -98,7 +99,7 @@ private:
     time_t                  m_nextFire        = 0;
     ScheduleState           m_state           = ScheduleState::Disabled;
 
-    time_t                  m_pauseUntil      = 0; // 0 = not paused
+    std::atomic<int64_t>    m_pauseUntil      { 0 }; // 0 = not paused
     std::atomic<time_t>     m_lastFiredTime   { 0 };
 };
 

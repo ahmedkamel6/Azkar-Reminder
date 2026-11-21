@@ -167,7 +167,7 @@ public:
     // Persist immediately
     bool Save();
 
-    // Accessors (Legacy - not thread safe against concurrent UI updates)
+    // Accessors (Legacy - kept temporarily for Track B UI compatibility; prefer GetCopy/Modify)
     AppSettings&       Get() { return m_settings; }
     const AppSettings& Get() const { return m_settings; }
 
@@ -175,9 +175,18 @@ public:
     AppSettings GetCopy() const;
     void Update(const AppSettings& newSettings);
 
+    template<typename Fn>
+    void Modify(Fn&& fn) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        fn(m_settings);
+    }
+
     // Change notification
     using ChangeCallback = std::function<void()>;
-    void OnChanged(ChangeCallback cb) { m_changeCallbacks.push_back(cb); }
+    void OnChanged(ChangeCallback cb) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_changeCallbacks.push_back(std::move(cb));
+    }
     void NotifyChanged();
 
     Settings(const Settings&) = delete;

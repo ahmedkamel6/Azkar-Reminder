@@ -9,7 +9,7 @@
   <Identity
     Name="15145Ahmedkamel.AzkarReminder"
     Publisher="CN=BD257909-6037-4C23-A6F3-A71B4BD2AF69"
-    Version="1.2.4.0"
+    Version="1.2.5.0"
     ProcessorArchitecture="x64" />
 
   <Properties>

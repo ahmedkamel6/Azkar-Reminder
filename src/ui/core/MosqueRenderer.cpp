@@ -353,6 +353,7 @@ void MosqueRenderer::Draw(ID2D1RenderTarget* rt, const D2D1_RECT_F& bounds, floa
     if (solidBrush) {
         solidBrush->Release();
     }
+    factory->Release();
 }
 
 } // namespace dhikr

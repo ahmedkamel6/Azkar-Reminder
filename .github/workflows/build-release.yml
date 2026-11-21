@@ -368,7 +368,7 @@ jobs:
           | Platform | File | Size |
           |----------|------|------|
           | 🪟 **Windows** (مُثبّت كلاسيكي Setup EXE) | `AzkarReminder-Windows-Setup.exe` | ~16 MB |
-          | 🏪 **Windows** (حزمة مايكروسوفت ستور MSIX) | `AzkarReminder-1.2.4.msix` | ~14 MB |
+          | 🏪 **Windows** (حزمة مايكروسوفت ستور MSIX) | `AzkarReminder-1.2.5.msix` | ~14 MB |
           | 🐧 **Linux** (Ubuntu, Fedora, Arch, etc.) | `AzkarReminder-x86_64.AppImage` | ~60 MB |
           | 🍎 **macOS** (Apple Silicon & Intel, macOS 11+) | `AzkarReminder-macOS.dmg` | ~38 MB |
 
@@ -413,11 +413,11 @@ jobs:
           2. شغّل المثبت وسيتم التثبيت وإضافة الأيقونة لشريط المهام (System Tray).
 
           **الخيار الثاني: حزمة مايكروسوفت ستور (MSIX):**
-          - **لنشر التطبيق على متجر مايكروسوفت**: يتم رفع ملف `AzkarReminder-1.2.4.msix` إلى حسابك في Microsoft Partner Center.
+          - **لنشر التطبيق على متجر مايكروسوفت**: يتم رفع ملف `AzkarReminder-1.2.5.msix` إلى حسابك في Microsoft Partner Center.
           - **للتجربة والتثبيت المباشر على ويندوز 10/11**:
             1. حمّل شهادة التطوير المرفقة `AzkarReminder-DeveloperCert.cer`.
             2. افتحها واختر **Install Certificate** -> **Local Machine** -> ضعها في **Trusted People**.
-            3. اضغط مرتين على `AzkarReminder-1.2.4.msix` وسيقوم Windows بتثبيته بنقرة زر واحدة.
+            3. اضغط مرتين على `AzkarReminder-1.2.5.msix` وسيقوم Windows بتثبيته بنقرة زر واحدة.
         files: |
           AzkarReminder-Windows-Packages/*
           AzkarReminder-Linux-AppImage/*

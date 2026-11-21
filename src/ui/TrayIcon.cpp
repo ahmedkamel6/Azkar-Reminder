@@ -95,7 +95,7 @@ void TrayIcon::UpdateIcon(ColorTheme themeOverride) {
 
     ColorTheme currentTheme = (themeOverride != static_cast<ColorTheme>(-1)) 
         ? themeOverride 
-        : Settings::Instance().Get().colorTheme;
+        : Settings::Instance().GetCopy().colorTheme;
 
     if (m_paused) {
         resId = IDI_APP_DORMANT_SMALL;
@@ -111,7 +111,7 @@ void TrayIcon::UpdateIcon(ColorTheme themeOverride) {
             default:                 resId = IDI_APP_ICON_SMALL;   fallbackRes = IDI_APP_ICON;        break;
         }
     }
-    HICON hIcon = (HICON)LoadImageW(m_hInst, MAKEINTRESOURCEW(resId), IMAGE_ICON, cx, cx, LR_DEFAULTCOLOR);
+    HICON hIcon = (HICON)LoadImageW(m_hInst, MAKEINTRESOURCEW(resId), IMAGE_ICON, cx, cx, LR_DEFAULTCOLOR | LR_SHARED);
     if (!hIcon) {
         hIcon = LoadIconW(m_hInst, MAKEINTRESOURCEW(resId));
     }
@@ -235,8 +235,8 @@ void TrayIcon::ShowContextMenu(HWND hwnd) {
     SetForegroundWindow(hwnd);
     TrackPopupMenuEx(hMenu, TPM_LEFTBUTTON | TPM_RIGHTBUTTON | TPM_BOTTOMALIGN,
         pt.x, pt.y, hwnd, nullptr);
+    PostMessageW(hwnd, WM_NULL, 0, 0);
 
-    DestroyMenu(hPause);
     DestroyMenu(hMenu);
 }
 

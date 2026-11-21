@@ -30,7 +30,7 @@ void TrayController::Show() {
 }
 
 void TrayController::BuildContextMenu() {
-    m_menu = new QMenu();
+    m_menu = new QMenu(m_mainWindow);
     m_menu->setStyleSheet(ThemeManager::Instance().GenerateApplicationStyleSheet());
 
     m_actOpen = m_menu->addAction(QString::fromStdWString(Localization::Instance().Get(L"tray.open", L"فتح الأذكار")),

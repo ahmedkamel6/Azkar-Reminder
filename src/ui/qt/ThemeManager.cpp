@@ -15,14 +15,14 @@ ThemeManager::ThemeManager() {
 }
 
 bool ThemeManager::IsAppPaused() const {
-    const auto& s = Settings::Instance().Get();
+    const auto s = Settings::Instance().GetCopy();
     if (!s.remindersEnabled || s.paused) return true;
     if (s.pauseUntilUnix > 0 && time(nullptr) < s.pauseUntilUnix) return true;
     return false;
 }
 
 ColorTheme ThemeManager::CurrentTheme() const {
-    return Settings::Instance().Get().colorTheme;
+    return Settings::Instance().GetCopy().colorTheme;
 }
 
 QColor ThemeManager::GetThemePrimary(ColorTheme theme, qreal alpha) const {

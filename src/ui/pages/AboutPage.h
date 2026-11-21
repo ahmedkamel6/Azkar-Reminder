@@ -14,6 +14,11 @@ public:
     bool OnLButtonUp(int x, int y) override;
     void OnMouseLeave() override;
     bool HitTestInteractive(int x, int y) override;
+    void ResetD2D() override {
+        if (m_brush) { m_brush->Release(); m_brush = nullptr; }
+        if (m_bmpQrVodafone) { m_bmpQrVodafone->Release(); m_bmpQrVodafone = nullptr; }
+        if (m_bmpQrIban) { m_bmpQrIban->Release(); m_bmpQrIban = nullptr; }
+    }
 
 private:
     void DrawCrescentLogo(ID2D1RenderTarget* rt, float cx, float cy, float radius);

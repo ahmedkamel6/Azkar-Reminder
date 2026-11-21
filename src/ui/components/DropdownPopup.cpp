@@ -38,9 +38,13 @@ void DropdownPopup::Show(HWND parent, int screenX, int screenY, float minWidth,
     m_maxScroll = 0.f;
     m_isRtl = Localization::Instance().IsRTL();
 
-    HDC hdc = GetDC(nullptr);
-    m_dpiScale = (float)GetDeviceCaps(hdc, LOGPIXELSX) / 96.f;
-    ReleaseDC(nullptr, hdc);
+    if (parent && IsWindow(parent)) {
+        m_dpiScale = (float)GetDpiForWindow(parent) / 96.f;
+    } else {
+        HDC hdc = GetDC(nullptr);
+        m_dpiScale = hdc ? (float)GetDeviceCaps(hdc, LOGPIXELSX) / 96.f : 1.0f;
+        if (hdc) ReleaseDC(nullptr, hdc);
+    }
 
     m_itemH = 34.f * m_dpiScale;
     float pad = 6.f * m_dpiScale;

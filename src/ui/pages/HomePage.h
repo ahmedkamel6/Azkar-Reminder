@@ -18,12 +18,18 @@ public:
     HomePage();
     ~HomePage();
     void Draw(ID2D1RenderTarget* rt, const D2D1_RECT_F& bounds) override;
+    void ResetD2D() override {
+        if (m_brush) { m_brush->Release(); m_brush = nullptr; }
+        if (m_d2dFactory_) { m_d2dFactory_->Release(); m_d2dFactory_ = nullptr; }
+    }
     bool OnLButtonDown(int x, int y) override;
     bool OnMouseMove(int x, int y) override;
     void OnMouseLeave() override;
     void OnSettingsChanged() override;
     void OnActivated() override;
     bool HitTestInteractive(int x, int y) override;
+
+    friend class ScreenshotExporter;
 
 private:
     std::shared_ptr<ToggleControl> m_masterToggle;

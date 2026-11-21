@@ -28,7 +28,7 @@ void LogoRenderer::Draw(ID2D1RenderTarget* rt, const D2D1_RECT_F& dest, float al
     auto darkBase  = isPaused ? ds::Rgba(0x14, 0x18, 0x15, alpha) : ds::Rgba(0x0E, 0x14, 0x0F, alpha);
     auto onyxDisc  = isPaused ? ds::Rgba(0x0A, 0x0C, 0x0A, alpha) : ds::Rgba(0x06, 0x08, 0x06, alpha);
     auto innerRing = isPaused ? ds::Rgba(0x28, 0x2E, 0x29, alpha * 0.8f) : ds::Rgba(0x22, 0x30, 0x24, alpha * 0.8f);
-    auto& ac       = Settings::Instance().Get().accentColor;
+    auto ac        = Settings::Instance().GetCopy().accentColor;
 
     // 1. Outer Glow Aura
     brush->SetColor(glowCol);
@@ -118,9 +118,8 @@ void LogoRenderer::Draw(ID2D1RenderTarget* rt, const D2D1_RECT_F& dest, float al
                 // Subtle Outer Edge Highlight
                 brush->SetColor(ds::Rgba(0xFF, 0xFF, 0xFF, alpha * 0.45f));
                 rt->DrawGeometry(pathGeo, brush, std::max(0.75f, R * 0.02f));
-
-                pathGeo->Release();
             }
+            pathGeo->Release();
         }
     }
 

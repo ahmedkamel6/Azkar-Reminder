@@ -7,6 +7,11 @@
 
 namespace dhikr {
 
+static std::string ColText(sqlite3_stmt* s, int col) {
+    const unsigned char* text = sqlite3_column_text(s, col);
+    return text ? reinterpret_cast<const char*>(text) : "";
+}
+
 static inline void SafeLocalTime(struct tm* tm, const time_t* time) {
 #ifdef _WIN32
     localtime_s(tm, time);
@@ -39,6 +44,8 @@ bool Database::Open(const std::filesystem::path& dbPath) {
         m_db = nullptr;
         return false;
     }
+
+    sqlite3_busy_timeout(m_db, 5000);
 
     LOG_INFO("Executing pragmas...");
     // Performance pragmas
@@ -163,7 +170,7 @@ int Database::GetWeekCount() {
     if (!m_db) return 0;
     const char* sql =
         "SELECT COUNT(*) FROM reminder_events "
-        "WHERE action='delivered' AND timestamp >= datetime('now', '-7 days');";
+        "WHERE action='delivered' AND timestamp >= datetime('now', 'localtime', '-7 days');";
     sqlite3_stmt* stmt = nullptr;
     if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, nullptr) != SQLITE_OK) return 0;
     int count = 0;
@@ -174,7 +181,7 @@ int Database::GetWeekCount() {
 
 int Database::GetCurrentStreakDays() {
     if (!m_db) return 0;
-    // Count consecutive days back from today that have at least one delivered reminder
+    // Count consecutive days back from today (or yesterday if none yet today)
     const char* sql =
         "SELECT DISTINCT substr(timestamp,1,10) as day "
         "FROM reminder_events WHERE action='delivered' "
@@ -184,8 +191,8 @@ int Database::GetCurrentStreakDays() {
 
     std::vector<std::string> days;
     while (sqlite3_step(stmt) == SQLITE_ROW) {
-        const char* d = (const char*)sqlite3_column_text(stmt, 0);
-        if (d) days.push_back(d);
+        std::string d = ColText(stmt, 0);
+        if (!d.empty()) days.push_back(std::move(d));
     }
     sqlite3_finalize(stmt);
 
@@ -195,15 +202,28 @@ int Database::GetCurrentStreakDays() {
     std::tm tm{};
     SafeLocalTime(&tm, &now);
 
-    int streak = 0;
-    for (size_t i = 0; i < days.size(); ++i) {
+    auto formatOffsetDate = [&](int daysBack) -> std::string {
         std::tm expected = tm;
-        expected.tm_mday -= (int)i;
+        expected.tm_mday -= daysBack;
         expected.tm_isdst = -1; // Let mktime determine DST for the shifted day
         mktime(&expected);
         std::ostringstream ss;
         ss << std::put_time(&expected, "%Y-%m-%d");
-        if (days[i] == ss.str()) {
+        return ss.str();
+    };
+
+    int startOffset = 0;
+    if (days[0] != formatOffsetDate(0)) {
+        if (days[0] == formatOffsetDate(1)) {
+            startOffset = 1;
+        } else {
+            return 0;
+        }
+    }
+
+    int streak = 0;
+    for (size_t i = 0; i < days.size(); ++i) {
+        if (days[i] == formatOffsetDate(startOffset + (int)i)) {
             ++streak;
         } else {
             break;
@@ -222,7 +242,7 @@ std::vector<DailyStat> Database::GetDailyStats(int days) {
         "SUM(CASE WHEN action='dismissed' THEN 1 ELSE 0 END) as dismissed, "
         "SUM(CASE WHEN action='snoozed' THEN 1 ELSE 0 END) as snoozed "
         "FROM reminder_events "
-        "WHERE timestamp >= datetime('now', ? || ' days') "
+        "WHERE timestamp >= datetime('now', 'localtime', ? || ' days') "
         "GROUP BY day ORDER BY day DESC;";
 
     sqlite3_stmt* stmt = nullptr;
@@ -233,7 +253,7 @@ std::vector<DailyStat> Database::GetDailyStats(int days) {
 
     while (sqlite3_step(stmt) == SQLITE_ROW) {
         DailyStat stat;
-        stat.date      = (const char*)sqlite3_column_text(stmt, 0);
+        stat.date      = ColText(stmt, 0);
         stat.delivered = sqlite3_column_int(stmt, 1);
         stat.dismissed = sqlite3_column_int(stmt, 2);
         stat.snoozed   = sqlite3_column_int(stmt, 3);
@@ -259,14 +279,10 @@ std::vector<ReminderEvent> Database::GetRecentEvents(int limit) {
     while (sqlite3_step(stmt) == SQLITE_ROW) {
         ReminderEvent evt{};
         evt.id = sqlite3_column_int64(stmt, 0);
-        const char* ts  = (const char*)sqlite3_column_text(stmt, 1);
-        const char* cid = (const char*)sqlite3_column_text(stmt, 2);
-        const char* cat = (const char*)sqlite3_column_text(stmt, 3);
-        const char* act = (const char*)sqlite3_column_text(stmt, 4);
-        if (ts)  evt.timestamp = ts;
-        if (cid) evt.contentId = cid;
-        if (cat) evt.category  = cat;
-        if (act) evt.action    = act;
+        evt.timestamp = ColText(stmt, 1);
+        evt.contentId = ColText(stmt, 2);
+        evt.category  = ColText(stmt, 3);
+        evt.action    = ColText(stmt, 4);
         result.push_back(evt);
     }
     sqlite3_finalize(stmt);
@@ -284,7 +300,8 @@ std::vector<std::string> Database::GetRecentContentIds(int limit) {
     if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, nullptr) != SQLITE_OK) return result;
     sqlite3_bind_int(stmt, 1, limit);
     while (sqlite3_step(stmt) == SQLITE_ROW) {
-        result.push_back((const char*)sqlite3_column_text(stmt, 0));
+        std::string cid = ColText(stmt, 0);
+        if (!cid.empty()) result.push_back(std::move(cid));
     }
     sqlite3_finalize(stmt);
     return result;
@@ -305,10 +322,10 @@ std::vector<std::pair<std::string, int>> Database::GetTopDhikrs(int limit) {
     if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, nullptr) != SQLITE_OK) return result;
     sqlite3_bind_int(stmt, 1, limit);
     while (sqlite3_step(stmt) == SQLITE_ROW) {
-        const char* cid = (const char*)sqlite3_column_text(stmt, 0);
+        std::string cid = ColText(stmt, 0);
         int count = sqlite3_column_int(stmt, 1);
-        if (cid) {
-            result.push_back({std::string(cid), count});
+        if (!cid.empty()) {
+            result.push_back({std::move(cid), count});
         }
     }
     sqlite3_finalize(stmt);

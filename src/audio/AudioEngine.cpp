@@ -4,10 +4,23 @@
 #include "../core/Application.h"
 #include "../resource.h"
 #include <cmath>
+#include <cstring>
+#include <algorithm>
 #include <filesystem>
 #include <shlwapi.h>
 
 namespace dhikr {
+
+namespace {
+struct MFScopeGuard {
+    bool initialized = false;
+    ~MFScopeGuard() {
+        if (initialized) {
+            MFShutdown();
+        }
+    }
+};
+} // namespace
 
 AudioEngine& AudioEngine::Instance() {
     static AudioEngine instance;
@@ -15,7 +28,13 @@ AudioEngine& AudioEngine::Instance() {
 }
 
 bool AudioEngine::Initialize(HINSTANCE hInstance) {
+    std::lock_guard<std::mutex> lock(m_audioMutex);
     m_hInstance = hInstance;
+    return InitializeLocked();
+}
+
+bool AudioEngine::InitializeLocked() {
+    if (m_initialized) return true;
 
     // Initialize COM
     HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
@@ -31,21 +50,30 @@ bool AudioEngine::Initialize(HINSTANCE hInstance) {
         return false;
     }
 
+    m_pXAudio2->RegisterForCallbacks(this);
+
     hr = m_pXAudio2->CreateMasteringVoice(&m_pMasterVoice);
     if (FAILED(hr)) {
         LOG_WARN("AudioEngine: CreateMasteringVoice failed");
-        if (m_pXAudio2) { m_pXAudio2->Release(); m_pXAudio2 = nullptr; }
+        m_pXAudio2->UnregisterForCallbacks(this);
+        m_pXAudio2->Release();
+        m_pXAudio2 = nullptr;
         return false;
     }
 
-    GenerateDefaultWav();
-    
-    if (!m_audioData.empty() && m_wfx.wFormatTag != 0) {
-        hr = m_pXAudio2->CreateSourceVoice(&m_pSourceVoice, &m_wfx);
+    GenerateDefaultWavLocked();
+
+    const WAVEFORMATEX* wfx = WfxPtr();
+    if (!m_audioData.empty() && wfx && wfx->wFormatTag != 0) {
+        hr = m_pXAudio2->CreateSourceVoice(&m_pSourceVoice, wfx);
         if (FAILED(hr)) {
             LOG_WARN("AudioEngine: CreateSourceVoice failed");
             if (m_pMasterVoice) { m_pMasterVoice->DestroyVoice(); m_pMasterVoice = nullptr; }
-            if (m_pXAudio2) { m_pXAudio2->Release(); m_pXAudio2 = nullptr; }
+            if (m_pXAudio2) {
+                m_pXAudio2->UnregisterForCallbacks(this);
+                m_pXAudio2->Release();
+                m_pXAudio2 = nullptr;
+            }
             return false;
         }
     } else {
@@ -53,14 +81,21 @@ bool AudioEngine::Initialize(HINSTANCE hInstance) {
         // We'll fall back to MessageBeep when playing
     }
 
+    m_deviceLost.store(false);
     m_initialized = true;
     LOG_INFO("AudioEngine initialized via XAudio2");
     return true;
 }
 
 void AudioEngine::Shutdown() {
+    std::lock_guard<std::mutex> lock(m_audioMutex);
+    ShutdownLocked();
+}
+
+void AudioEngine::ShutdownLocked() {
     if (m_pSourceVoice) {
-        m_pSourceVoice->Stop();
+        m_pSourceVoice->Stop(0);
+        m_pSourceVoice->FlushSourceBuffers();
         m_pSourceVoice->DestroyVoice();
         m_pSourceVoice = nullptr;
     }
@@ -69,6 +104,7 @@ void AudioEngine::Shutdown() {
         m_pMasterVoice = nullptr;
     }
     if (m_pXAudio2) {
+        m_pXAudio2->UnregisterForCallbacks(this);
         m_pXAudio2->Release();
         m_pXAudio2 = nullptr;
     }
@@ -77,48 +113,49 @@ void AudioEngine::Shutdown() {
 }
 
 void AudioEngine::Stop() {
+    std::lock_guard<std::mutex> lock(m_audioMutex);
     if (m_initialized && m_pSourceVoice) {
-        m_pSourceVoice->Stop();
+        m_pSourceVoice->Stop(0);
         m_pSourceVoice->FlushSourceBuffers();
     }
 }
 
 void AudioEngine::ReloadSound() {
+    std::lock_guard<std::mutex> lock(m_audioMutex);
     if (!m_initialized || !m_pXAudio2) return;
     if (m_pSourceVoice) {
-        m_pSourceVoice->Stop();
+        m_pSourceVoice->Stop(0);
         m_pSourceVoice->FlushSourceBuffers();
         m_pSourceVoice->DestroyVoice();
         m_pSourceVoice = nullptr;
     }
-    GenerateDefaultWav();
-    if (!m_audioData.empty() && m_wfx.wFormatTag != 0) {
-        m_pXAudio2->CreateSourceVoice(&m_pSourceVoice, &m_wfx);
+    GenerateDefaultWavLocked();
+    const WAVEFORMATEX* wfx = WfxPtr();
+    if (!m_audioData.empty() && wfx && wfx->wFormatTag != 0) {
+        m_pXAudio2->CreateSourceVoice(&m_pSourceVoice, wfx);
     }
 }
 
 // ── Load and decode MP3/audio into memory ────────────────────────────────────
-void AudioEngine::GenerateDefaultWav() {
+void AudioEngine::GenerateDefaultWavLocked() {
     m_audioData.clear();
-    memset(&m_wfx, 0, sizeof(m_wfx));
+    m_wfxBuffer.clear();
 
-    HRESULT hr = MFStartup(MF_VERSION);
-    if (FAILED(hr)) return;
+    auto settingsCopy = Settings::Instance().GetCopy();
+    auto preset = settingsCopy.soundPreset;
 
-    IMFSourceReader* pReader = nullptr;
-    
-    auto preset = Settings::Instance().Get().soundPreset;
-
-    // Procedural synthesis for built-in acoustic presets (Zero disk dependency)
+    // Procedural synthesis for built-in acoustic presets (Zero disk/MF dependency)
     if (preset == SoundPreset::WaterDrop || preset == SoundPreset::AmbientEcho || preset == SoundPreset::WoodTap) {
         int sampleRate = 44100;
-        m_wfx.wFormatTag = WAVE_FORMAT_PCM;
-        m_wfx.nChannels = 1;
-        m_wfx.nSamplesPerSec = sampleRate;
-        m_wfx.wBitsPerSample = 16;
-        m_wfx.nBlockAlign = 2;
-        m_wfx.nAvgBytesPerSec = sampleRate * 2;
-        m_wfx.cbSize = 0;
+        m_wfxBuffer.assign(sizeof(WAVEFORMATEX), 0);
+        auto* wfx = reinterpret_cast<WAVEFORMATEX*>(m_wfxBuffer.data());
+        wfx->wFormatTag = WAVE_FORMAT_PCM;
+        wfx->nChannels = 1;
+        wfx->nSamplesPerSec = sampleRate;
+        wfx->wBitsPerSample = 16;
+        wfx->nBlockAlign = 2;
+        wfx->nAvgBytesPerSec = sampleRate * 2;
+        wfx->cbSize = 0;
 
         float durationSec = (preset == SoundPreset::AmbientEcho) ? 1.35f : ((preset == SoundPreset::WaterDrop) ? 0.28f : 0.12f);
         int totalSamples = (int)(sampleRate * durationSec);
@@ -157,8 +194,15 @@ void AudioEngine::GenerateDefaultWav() {
         return;
     }
 
+    MFScopeGuard mfGuard;
+    HRESULT hr = MFStartup(MF_VERSION);
+    if (FAILED(hr)) return;
+    mfGuard.initialized = true;
+
+    IMFSourceReader* pReader = nullptr;
+
     // 1. Try custom user sound path if configured and preset is Custom
-    std::wstring customPath = Settings::Instance().Get().customSoundPath;
+    std::wstring customPath = settingsCopy.customSoundPath;
     if (preset == SoundPreset::Custom && !customPath.empty() && std::filesystem::exists(customPath)) {
         hr = MFCreateSourceReaderFromURL(customPath.c_str(), nullptr, &pReader);
         if (SUCCEEDED(hr) && pReader) {
@@ -202,7 +246,6 @@ void AudioEngine::GenerateDefaultWav() {
 
     if (!pReader) {
         LOG_WARN("AudioEngine: No audio source could be loaded");
-        MFShutdown();
         return;
     }
 
@@ -219,12 +262,15 @@ void AudioEngine::GenerateDefaultWav() {
         IMFMediaType* pUncompressedAudioType = nullptr;
         hr = pReader->GetCurrentMediaType((DWORD)MF_SOURCE_READER_FIRST_AUDIO_STREAM, &pUncompressedAudioType);
         if (SUCCEEDED(hr)) {
-            // Get the wave format
+            // Get the wave format (copy full cbFormat bytes so extended formats are never sliced)
             UINT32 cbFormat = 0;
             WAVEFORMATEX* pWavFormat = nullptr;
-            MFCreateWaveFormatExFromMFMediaType(pUncompressedAudioType, &pWavFormat, &cbFormat);
+            if (SUCCEEDED(MFCreateWaveFormatExFromMFMediaType(pUncompressedAudioType, &pWavFormat, &cbFormat)) &&
+                pWavFormat && cbFormat >= sizeof(WAVEFORMATEX)) {
+                m_wfxBuffer.resize(cbFormat);
+                std::memcpy(m_wfxBuffer.data(), pWavFormat, cbFormat);
+            }
             if (pWavFormat) {
-                m_wfx = *pWavFormat;
                 CoTaskMemFree(pWavFormat);
             }
 
@@ -256,40 +302,60 @@ void AudioEngine::GenerateDefaultWav() {
             pUncompressedAudioType->Release();
         }
     }
-    
+
     pReader->Release();
-    MFShutdown();
-    
+
     LOG_INFO("AudioEngine: Audio decoded successfully, bytes: " + std::to_string(m_audioData.size()));
 }
 
 void AudioEngine::PlayReminder(float volumeOverride) {
+    auto s = Settings::Instance().GetCopy();
+    if (!s.soundEnabled && volumeOverride < 0.0f) return;
+
+    std::lock_guard<std::mutex> lock(m_audioMutex);
+
+    if (m_deviceLost.exchange(false)) {
+        LOG_WARN("AudioEngine: Device lost detected, reinitializing XAudio2");
+        ShutdownLocked();
+        InitializeLocked();
+    }
+
     if (!m_initialized || !m_pSourceVoice || m_audioData.empty()) {
         MessageBeep(MB_ICONASTERISK); // Fallback
         return;
     }
 
-    auto& s = Settings::Instance().Get();
-    if (!s.soundEnabled && volumeOverride < 0.0f) return;
+    float vol = (volumeOverride >= 0.0f) ? std::clamp(volumeOverride, 0.0f, 1.0f) : (s.soundVolume / 100.0f);
+    float amp = vol * vol;
 
-    // Ensure playback isn't stacking out of control
-    m_pSourceVoice->Stop();
-    m_pSourceVoice->FlushSourceBuffers();
+    auto tryPlay = [&]() -> HRESULT {
+        m_pSourceVoice->Stop(0);
+        m_pSourceVoice->FlushSourceBuffers();
 
-    XAUDIO2_BUFFER buffer = {0};
-    buffer.AudioBytes = (UINT32)m_audioData.size();
-    buffer.pAudioData = m_audioData.data();
-    buffer.Flags = XAUDIO2_END_OF_STREAM;
+        XAUDIO2_BUFFER buffer = {0};
+        buffer.AudioBytes = (UINT32)m_audioData.size();
+        buffer.pAudioData = m_audioData.data();
+        buffer.Flags = XAUDIO2_END_OF_STREAM;
 
-    HRESULT hr = m_pSourceVoice->SubmitSourceBuffer(&buffer);
-    if (SUCCEEDED(hr)) {
-        float vol = (volumeOverride >= 0.0f) ? std::clamp(volumeOverride, 0.0f, 1.0f) : (s.soundVolume / 100.0f);
-        float amp = vol * vol;
+        HRESULT hr = m_pSourceVoice->SubmitSourceBuffer(&buffer);
+        if (FAILED(hr)) return hr;
         m_pSourceVoice->SetVolume(amp);
-        m_pSourceVoice->Start(0);
+        return m_pSourceVoice->Start(0);
+    };
+
+    HRESULT hr = tryPlay();
+    if (hr == XAUDIO2_E_DEVICE_INVALIDATED) {
+        LOG_WARN("AudioEngine: XAUDIO2_E_DEVICE_INVALIDATED, reinitializing and retrying once");
+        ShutdownLocked();
+        if (InitializeLocked() && m_pSourceVoice && !m_audioData.empty()) {
+            hr = tryPlay();
+        }
+    }
+
+    if (SUCCEEDED(hr)) {
         LOG_INFO("AudioEngine: Playing notification sound at volume " + std::to_string(vol));
     } else {
-        LOG_WARN("AudioEngine: SubmitSourceBuffer failed");
+        LOG_WARN("AudioEngine: Playback failed");
         MessageBeep(MB_ICONASTERISK);
     }
 }

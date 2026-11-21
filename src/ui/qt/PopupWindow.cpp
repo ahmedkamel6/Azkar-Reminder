@@ -146,7 +146,7 @@ void PopupWindow::ShowReminder(const ContentItem& item) {
     m_currentItem = item;
     m_isPausedByHover = false;
 
-    const auto& s = Settings::Instance().Get();
+    const auto s = Settings::Instance().GetCopy();
 
     m_lblCategory->setText(QString::fromStdString(item.category));
     m_lblSource->setText(s.showSource ? QString::fromStdWString(item.source) : QString());
@@ -183,7 +183,7 @@ void PopupWindow::ShowReminder(const ContentItem& item) {
 }
 
 void PopupWindow::PositionWindow() {
-    const auto& s = Settings::Instance().Get();
+    const auto s = Settings::Instance().GetCopy();
     QScreen* screen = nullptr;
     if (s.popupMonitor == PopupMonitor::Active) {
         screen = QGuiApplication::screenAt(QCursor::pos());
@@ -228,7 +228,7 @@ void PopupWindow::PositionWindow() {
 }
 
 int PopupWindow::GetAnimationDurationMs() const {
-    switch (Settings::Instance().Get().animationSpeed) {
+    switch (Settings::Instance().GetCopy().animationSpeed) {
         case AnimationSpeed::Snappy:    return 250;
         case AnimationSpeed::Cinematic: return 550;
         case AnimationSpeed::Normal:
@@ -237,7 +237,7 @@ int PopupWindow::GetAnimationDurationMs() const {
 }
 
 void PopupWindow::StartEntranceAnimation() {
-    const auto& s = Settings::Instance().Get();
+    const auto s = Settings::Instance().GetCopy();
     if (!s.animationEnabled) {
         setGeometry(m_targetGeometry);
         setWindowOpacity(1.0);
@@ -335,7 +335,7 @@ void PopupWindow::Dismiss() {
 void PopupWindow::StartExitAnimation() {
     StopActiveAnimations();
 
-    if (!Settings::Instance().Get().animationEnabled) {
+    if (!Settings::Instance().GetCopy().animationEnabled) {
         hide();
         setWindowOpacity(1.0);
         return;

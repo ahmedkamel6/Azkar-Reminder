@@ -15,12 +15,12 @@ AboutPage::AboutPage() {
     auto* dwf = Application::Instance().DWriteFactory();
     if (!dwf) return;
     m_dwf = dwf;
-    HDC hdc = GetDC(nullptr);
-    m_dpiScale = (float)GetDeviceCaps(hdc, LOGPIXELSX) / 96.f;
-    ReleaseDC(nullptr, hdc);
+    m_dpiScale = MainWindow::Instance().GetDpiScale();
+    if (m_dpiScale <= 0.f) m_dpiScale = 1.f;
 
+    auto* cairoCol = Application::Instance().CairoFontCollection();
     auto mk = [&](float sz, DWRITE_FONT_WEIGHT wt, DWRITE_TEXT_ALIGNMENT ta, DWRITE_PARAGRAPH_ALIGNMENT pa, IDWriteTextFormat** out, const wchar_t* fontName = nullptr) {
-        dwf->CreateTextFormat(fontName ? fontName : ds::Font::Arabic(), nullptr, wt, DWRITE_FONT_STYLE_NORMAL,
+        dwf->CreateTextFormat(fontName ? fontName : ds::Font::Arabic(), fontName ? nullptr : cairoCol, wt, DWRITE_FONT_STYLE_NORMAL,
             DWRITE_FONT_STRETCH_NORMAL, sz * m_dpiScale, L"en-US", out);
         if (*out) {
             (*out)->SetTextAlignment(ta);
@@ -572,16 +572,26 @@ bool AboutPage::OnLButtonDown(int x, int y) {
 }
 
 static void CopyTextToClipboard(const std::wstring& str) {
-    if (OpenClipboard(nullptr)) {
-        EmptyClipboard();
-        HGLOBAL hg = GlobalAlloc(GMEM_MOVEABLE, (str.size() + 1) * sizeof(wchar_t));
-        if (hg) {
-            memcpy(GlobalLock(hg), str.c_str(), (str.size() + 1) * sizeof(wchar_t));
-            GlobalUnlock(hg);
-            SetClipboardData(CF_UNICODETEXT, hg);
-        }
+    if (str.empty() || !OpenClipboard(nullptr)) return;
+    EmptyClipboard();
+    const size_t bytes = (str.size() + 1) * sizeof(wchar_t);
+    HGLOBAL hg = GlobalAlloc(GMEM_MOVEABLE, bytes);
+    if (!hg) {
         CloseClipboard();
+        return;
     }
+    void* p = GlobalLock(hg);
+    if (!p) {
+        GlobalFree(hg);
+        CloseClipboard();
+        return;
+    }
+    memcpy(p, str.c_str(), bytes);
+    GlobalUnlock(hg);
+    if (!SetClipboardData(CF_UNICODETEXT, hg)) {
+        GlobalFree(hg);
+    }
+    CloseClipboard();
 }
 
 bool AboutPage::OnLButtonUp(int x, int y) {

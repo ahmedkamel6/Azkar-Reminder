@@ -23,13 +23,13 @@ HomePage::HomePage() {
     if (!dwf) return;
     m_dwf = dwf;
 
-    HDC hdc = GetDC(nullptr);
-    m_dpiScale = (float)GetDeviceCaps(hdc, LOGPIXELSX) / 96.f;
-    ReleaseDC(nullptr, hdc);
+    m_dpiScale = MainWindow::Instance().GetDpiScale();
+    if (m_dpiScale <= 0.f) m_dpiScale = 1.f;
 
     const wchar_t* fontName = ds::Font::Arabic();
+    auto* fontCol = Application::Instance().CairoFontCollection();
     auto create = [&](float size, DWRITE_FONT_WEIGHT wt, IDWriteTextFormat** out) {
-        HRESULT hr = dwf->CreateTextFormat(fontName, nullptr, wt,
+        HRESULT hr = dwf->CreateTextFormat(fontName, fontCol, wt,
             DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
             size * m_dpiScale, L"en-US", out);
         if (FAILED(hr) || !*out) {
@@ -58,17 +58,20 @@ HomePage::HomePage() {
         m_tfBadge->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
     }
 
-    m_masterToggle = std::make_shared<ToggleControl>(Settings::Instance().Get().remindersEnabled && !ds::Accent::IsAppPaused());
+    m_masterToggle = std::make_shared<ToggleControl>(Settings::Instance().GetCopy().remindersEnabled && !ds::Accent::IsAppPaused());
     m_masterToggle->OnClick = []() {
-        auto& s = Settings::Instance().Get();
-        s.remindersEnabled = !s.remindersEnabled;
-        if (s.remindersEnabled) {
-            s.paused = false;
-            s.pauseUntilUnix = 0;
-        }
+        bool nowEnabled = false;
+        Settings::Instance().Modify([&](AppSettings& s) {
+            s.remindersEnabled = !s.remindersEnabled;
+            if (s.remindersEnabled) {
+                s.paused = false;
+                s.pauseUntilUnix = 0;
+            }
+            nowEnabled = s.remindersEnabled;
+        });
         Settings::Instance().Save();
         Scheduler::Instance().Recalculate();
-        TrayIcon::Instance().SetPaused(!s.remindersEnabled);
+        TrayIcon::Instance().SetPaused(!nowEnabled);
         MainWindow::Instance().UpdateAppIcon();
         MainWindow::Instance().Invalidate();
     };
@@ -96,7 +99,7 @@ void HomePage::OnActivated() {
 
 void HomePage::OnSettingsChanged() {
     if (m_masterToggle) {
-        m_masterToggle->SetIsOn(Settings::Instance().Get().remindersEnabled && !ds::Accent::IsAppPaused());
+        m_masterToggle->SetIsOn(Settings::Instance().GetCopy().remindersEnabled && !ds::Accent::IsAppPaused());
     }
     OnActivated();
 }
@@ -231,7 +234,7 @@ void HomePage::DrawStatusBadge(ID2D1RenderTarget* rt, float x, float y, float w)
     m_statusBadgeRect = r;
 
     float rx = badgeH / 2.f;
-    bool isOn = Settings::Instance().Get().remindersEnabled && !ds::Accent::IsAppPaused();
+    bool isOn = Settings::Instance().GetCopy().remindersEnabled && !ds::Accent::IsAppPaused();
     bool isRtl = Localization::Instance().IsRTL();
 
     // Pill background
@@ -390,7 +393,7 @@ void HomePage::DrawNextReminderHero(ID2D1RenderTarget* rt, const D2D1_RECT_F& r,
     }
 
     // Preview Quote
-    const ContentItem* previewItem = ContentEngine::Instance().GetNextPreview();
+    auto previewItem = ContentEngine::Instance().GetNextPreview();
     if (previewItem && !previewItem->text.empty() && m_tfSmall) {
         m_brush->SetColor(isPaused ? ds::TextSecondary() : ds::Accent::Primary(0.80f));
         m_tfSmall->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
@@ -415,10 +418,10 @@ void HomePage::DrawTodayGoalCard(ID2D1RenderTarget* rt, const D2D1_RECT_F& r, bo
     bool isRtl = Localization::Instance().IsRTL();
 
     int delivered = m_todayDelivered;
-    auto& ds_ref = Settings::Instance().Get();
+    const auto ds_ref = Settings::Instance().GetCopy();
     int dow = 0;
     { struct tm lt; time_t now = time(nullptr); localtime_s(&lt, &now); dow = lt.tm_wday; }
-    auto& daysch = ds_ref.weeklySchedule[dow];
+    const auto& daysch = ds_ref.weeklySchedule[dow];
     int windowMin = (daysch.endHour * 60 + daysch.endMin) - (daysch.startHour * 60 + daysch.startMin);
     int goal = (windowMin > 0 && daysch.frequencyMinutes > 0) ? windowMin / daysch.frequencyMinutes : 20;
     goal = std::max(1, goal);
@@ -795,9 +798,9 @@ void HomePage::DrawProgressTimeline(ID2D1RenderTarget* rt, const D2D1_RECT_F& ar
 
     // Schedule window indicator
     struct tm lt; time_t now = time(nullptr); localtime_s(&lt, &now);
-    auto& s = Settings::Instance().Get();
+    const auto s = Settings::Instance().GetCopy();
     int dow = lt.tm_wday;
-    auto& ds_ref = s.weeklySchedule[dow];
+    const auto& ds_ref = s.weeklySchedule[dow];
     int startMin = ds_ref.startHour * 60 + ds_ref.startMin;
     int endMin   = ds_ref.endHour   * 60 + ds_ref.endMin;
     int nowMin   = lt.tm_hour * 60 + lt.tm_min;

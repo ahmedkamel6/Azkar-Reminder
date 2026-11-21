@@ -21,7 +21,7 @@ void UIStateManager::RefreshStateFromBackendAsync() {
     CreateThread(nullptr, 0, [](LPVOID) -> DWORD {
         AppUIState newState;
         newState.currentPage = UIStateManager::Instance().GetState().currentPage;
-        newState.settings = Settings::Instance().Get();
+        newState.settings = Settings::Instance().GetCopy();
         
         auto& db = Database::Instance();
         newState.todayDelivered = db.GetTodayDeliveredCount();

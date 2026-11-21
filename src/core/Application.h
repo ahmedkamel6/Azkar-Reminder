@@ -3,6 +3,10 @@
 #include <d2d1.h>
 #include <dwrite.h>
 #include <string>
+#include <atomic>
+
+struct IDWriteFontCollection;
+struct IDWriteInMemoryFontFileLoader;
 
 namespace dhikr {
 
@@ -27,8 +31,9 @@ public:
     void Shutdown();
 
     // Direct2D factory (shared across all windows)
-    ID2D1Factory*       D2DFactory()   const { return m_d2dFactory; }
-    IDWriteFactory*     DWriteFactory() const { return m_dwriteFactory; }
+    ID2D1Factory*          D2DFactory()   const { return m_d2dFactory; }
+    IDWriteFactory*        DWriteFactory() const { return m_dwriteFactory; }
+    IDWriteFontCollection* CairoFontCollection() const { return m_cairoFontCollection; }
 
     // App instance handle
     HINSTANCE HInstance() const { return m_hInstance; }
@@ -73,12 +78,14 @@ private:
     HWND             m_mainHwnd      = nullptr;
     std::wstring     m_appDataPath;
 
-    ID2D1Factory*    m_d2dFactory    = nullptr;
-    IDWriteFactory*  m_dwriteFactory = nullptr;
+    ID2D1Factory*                   m_d2dFactory          = nullptr;
+    IDWriteFactory*                 m_dwriteFactory       = nullptr;
+    IDWriteInMemoryFontFileLoader*  m_dwriteFontLoader    = nullptr;
+    IDWriteFontCollection*          m_cairoFontCollection = nullptr;
 
-    bool             m_initialized   = false;
-    bool             m_shuttingDown  = false;
-    HANDLE           m_hCairoFont    = nullptr;
+    bool              m_initialized   = false;
+    std::atomic<bool> m_shuttingDown  { false };
+    HANDLE            m_hCairoFont    = nullptr;
 };
 
 } // namespace dhikr

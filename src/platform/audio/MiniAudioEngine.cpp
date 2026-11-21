@@ -66,7 +66,7 @@ void MiniAudioEngine::Shutdown() {
 }
 
 std::filesystem::path MiniAudioEngine::ResolveSoundFilePath() const {
-    const auto& s = Settings::Instance().Get();
+    const auto s = Settings::Instance().GetCopy();
 
     // 1. Custom sound path if configured and exists
     if (!s.customSoundPath.empty()) {
@@ -130,25 +130,33 @@ void MiniAudioEngine::ReloadSound() {
     }
 
     m_sound = new ma_sound();
-    ma_result res = ma_sound_init_from_file(m_engine, path.string().c_str(), 0, nullptr, nullptr, m_sound);
+#ifdef _WIN32
+    ma_result res = ma_sound_init_from_file_w(m_engine, path.c_str(), 0, nullptr, nullptr, m_sound);
+#else
+    auto u8 = path.u8string();
+    ma_result res = ma_sound_init_from_file(m_engine, reinterpret_cast<const char*>(u8.c_str()), 0, nullptr, nullptr, m_sound);
+#endif
     if (res != MA_SUCCESS) {
-        LOG_WARN("Failed loading sound file: " + path.string() + ", error=" + std::to_string(res));
+        auto errU8 = path.u8string();
+        LOG_WARN("Failed loading sound file: " + std::string(errU8.begin(), errU8.end()) + ", error=" + std::to_string(res));
         delete m_sound;
         m_sound = nullptr;
         return;
     }
 
     m_loadedPath = path;
-    LOG_INFO("Loaded reminder audio: " + path.string());
+    auto loadedU8 = path.u8string();
+    LOG_INFO("Loaded reminder audio: " + std::string(loadedU8.begin(), loadedU8.end()));
 }
 
 void MiniAudioEngine::PlayReminder(float volumeOverride) {
-    if (!Settings::Instance().Get().soundEnabled) return;
+    const auto s = Settings::Instance().GetCopy();
+    if (!s.soundEnabled && volumeOverride < 0.0f) return;
 
     std::lock_guard<std::mutex> lock(m_mutex);
     if (!m_initialized && !Initialize()) return;
 
-    float vol = volumeOverride >= 0.0f ? volumeOverride : (Settings::Instance().Get().soundVolume / 100.0f);
+    float vol = volumeOverride >= 0.0f ? volumeOverride : (s.soundVolume / 100.0f);
     if (vol < 0.0f) vol = 0.0f;
     if (vol > 1.0f) vol = 1.0f;
 
@@ -158,9 +166,32 @@ void MiniAudioEngine::PlayReminder(float volumeOverride) {
         return;
     }
 
-    // Direct fire-and-forget playback
-    ma_engine_set_volume(m_engine, vol);
-    ma_result res = ma_engine_play_sound(m_engine, currentPath.string().c_str(), nullptr);
+    if (!m_sound || m_loadedPath != currentPath) {
+        if (m_sound) {
+            ma_sound_uninit(m_sound);
+            delete m_sound;
+            m_sound = nullptr;
+        }
+        m_sound = new ma_sound();
+#ifdef _WIN32
+        ma_result initRes = ma_sound_init_from_file_w(m_engine, currentPath.c_str(), 0, nullptr, nullptr, m_sound);
+#else
+        auto u8 = currentPath.u8string();
+        ma_result initRes = ma_sound_init_from_file(m_engine, reinterpret_cast<const char*>(u8.c_str()), 0, nullptr, nullptr, m_sound);
+#endif
+        if (initRes != MA_SUCCESS) {
+            LOG_WARN("Failed to initialize sound for playback: " + std::to_string(initRes));
+            delete m_sound;
+            m_sound = nullptr;
+            return;
+        }
+        m_loadedPath = currentPath;
+    }
+
+    ma_sound_stop(m_sound);
+    ma_sound_set_volume(m_sound, vol);
+    ma_sound_seek_to_pcm_frame(m_sound, 0);
+    ma_result res = ma_sound_start(m_sound);
     if (res != MA_SUCCESS) {
         LOG_WARN("Playback error: " + std::to_string(res));
     }

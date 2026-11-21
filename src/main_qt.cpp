@@ -54,7 +54,7 @@ int main(int argc, char* argv[]) {
     // 2. Load Settings & Localization
     dhikr::Settings::Instance().Load(dhikr::PlatformPaths::GetConfigDir());
     dhikr::Localization::Instance().SetLanguage(
-        dhikr::Settings::Instance().Get().language == L"en" ? L"en" : L"ar"
+        dhikr::Settings::Instance().GetCopy().language == L"en" ? L"en" : L"ar"
     );
 
     if (dhikr::Localization::Instance().IsRTL()) {

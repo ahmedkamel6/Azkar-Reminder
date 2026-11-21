@@ -35,9 +35,13 @@ void DurationPickerPopup::Show(HWND parent, int x, int y, int initialMinutes, On
     m_pressedElement = -1;
     m_firstKeyInput = true;
 
-    HDC hdc = GetDC(nullptr);
-    m_dpiScale = (float)GetDeviceCaps(hdc, LOGPIXELSX) / 96.f;
-    ReleaseDC(nullptr, hdc);
+    if (parent && IsWindow(parent)) {
+        m_dpiScale = (float)GetDpiForWindow(parent) / 96.f;
+    } else {
+        HDC hdc = GetDC(nullptr);
+        m_dpiScale = hdc ? (float)GetDeviceCaps(hdc, LOGPIXELSX) / 96.f : 1.0f;
+        if (hdc) ReleaseDC(nullptr, hdc);
+    }
 
     float w = 310.f * m_dpiScale;
     float h = 250.f * m_dpiScale;
@@ -150,10 +154,13 @@ LRESULT DurationPickerPopup::HandleMessage(HWND hwnd, UINT msg, WPARAM wp, LPARA
     static const int kPresets[] = { 1, 5, 10, 15, 20, 30, 45, 60 };
 
     switch (msg) {
-    case WM_PAINT:
+    case WM_PAINT: {
+        PAINTSTRUCT ps;
+        BeginPaint(hwnd, &ps);
         Render();
-        ValidateRect(hwnd, nullptr);
+        EndPaint(hwnd, &ps);
         return 0;
+    }
 
     case WM_MOUSEMOVE: {
         int x = GET_X_LPARAM(lp);
@@ -304,9 +311,37 @@ LRESULT DurationPickerPopup::HandleMessage(HWND hwnd, UINT msg, WPARAM wp, LPARA
         UINT newDpi = HIWORD(wp);
         RECT* newRect = reinterpret_cast<RECT*>(lp);
         m_dpiScale = newDpi / 96.0f;
+        int newW = newRect->right - newRect->left;
+        int newH = newRect->bottom - newRect->top;
         SetWindowPos(m_hwnd, nullptr, newRect->left, newRect->top,
-                     newRect->right - newRect->left, newRect->bottom - newRect->top,
+                     newW, newH,
                      SWP_NOZORDER | SWP_NOACTIVATE);
+        if (m_rt && newW > 0 && newH > 0) {
+            m_rt->Resize(D2D1::SizeU((UINT32)newW, (UINT32)newH));
+        }
+        if (m_tfTitle) { m_tfTitle->Release(); m_tfTitle = nullptr; }
+        if (m_tfBig)   { m_tfBig->Release();   m_tfBig   = nullptr; }
+        if (m_tfUnit)  { m_tfUnit->Release();  m_tfUnit  = nullptr; }
+        if (m_tfPill)  { m_tfPill->Release();  m_tfPill  = nullptr; }
+        if (m_tfBtn)   { m_tfBtn->Release();   m_tfBtn   = nullptr; }
+        if (m_dwf) {
+            const wchar_t* fontName = ds::Font::Arabic();
+            m_dwf->CreateTextFormat(fontName, nullptr, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_FONT_STYLE_NORMAL,
+                DWRITE_FONT_STRETCH_NORMAL, 14.f * m_dpiScale, L"ar-SA", &m_tfTitle);
+            if (m_tfTitle) { m_tfTitle->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER); m_tfTitle->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER); }
+            m_dwf->CreateTextFormat(fontName, nullptr, DWRITE_FONT_WEIGHT_BOLD, DWRITE_FONT_STYLE_NORMAL,
+                DWRITE_FONT_STRETCH_NORMAL, 36.f * m_dpiScale, L"en-US", &m_tfBig);
+            if (m_tfBig) { m_tfBig->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER); m_tfBig->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER); }
+            m_dwf->CreateTextFormat(fontName, nullptr, DWRITE_FONT_WEIGHT_REGULAR, DWRITE_FONT_STYLE_NORMAL,
+                DWRITE_FONT_STRETCH_NORMAL, 12.5f * m_dpiScale, L"ar-SA", &m_tfUnit);
+            if (m_tfUnit) { m_tfUnit->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER); m_tfUnit->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER); }
+            m_dwf->CreateTextFormat(fontName, nullptr, DWRITE_FONT_WEIGHT_MEDIUM, DWRITE_FONT_STYLE_NORMAL,
+                DWRITE_FONT_STRETCH_NORMAL, 11.f * m_dpiScale, L"en-US", &m_tfPill);
+            if (m_tfPill) { m_tfPill->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER); m_tfPill->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER); }
+            m_dwf->CreateTextFormat(fontName, nullptr, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_FONT_STYLE_NORMAL,
+                DWRITE_FONT_STRETCH_NORMAL, ds::FontSize::BtnLabel * m_dpiScale, L"ar-SA", &m_tfBtn);
+            if (m_tfBtn) { m_tfBtn->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER); m_tfBtn->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER); }
+        }
         InvalidateRect(hwnd, nullptr, FALSE);
         return 0;
     }

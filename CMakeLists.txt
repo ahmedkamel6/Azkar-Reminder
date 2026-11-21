@@ -115,7 +115,6 @@ set(UI_SOURCES
     src/ui/PopupWindow.cpp
     src/ui/TrayIcon.cpp
     src/ui/OnboardingFlow.cpp
-    src/ui/core/WindowChrome.cpp
     src/ui/core/LogoRenderer.cpp
     src/ui/core/MosqueRenderer.cpp
     src/ui/core/ResourceLoader.cpp
@@ -128,6 +127,7 @@ set(UI_SOURCES
     src/ui/pages/LibraryPage.cpp
     src/ui/pages/SettingsPage.cpp
     src/ui/pages/AboutPage.cpp
+    src/ui/ScreenshotExporter.cpp
 )
 
 set(AUDIO_SOURCES
@@ -145,6 +145,7 @@ set(ALL_SOURCES
     ${AUDIO_SOURCES}
     ${UPDATE_SOURCES}
     DhikrReminder.rc
+    DhikrReminder.exe.manifest
 )
 
 # ─── Windows Native Executable (Direct2D / Win32) ─────────────────────────
@@ -181,7 +182,6 @@ target_link_libraries(AzkarReminder PRIVATE
 # ─── Linker settings ──────────────────────────────────────────────────────
 if(MSVC)
     set_target_properties(AzkarReminder PROPERTIES
-        VS_DPI_AWARE "PerMonitor"
         LINK_FLAGS "/SUBSYSTEM:WINDOWS /ENTRY:wWinMainCRTStartup /DYNAMICBASE /HIGHENTROPYVA /NXCOMPAT /guard:cf"
     )
 endif()

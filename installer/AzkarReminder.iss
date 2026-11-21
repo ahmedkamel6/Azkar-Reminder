@@ -17,7 +17,7 @@
 ;   6. Upload release\AzkarReminder-Setup-v1.1.0.exe as the release asset
 
 #define AppName        "Azkar Reminder"
-#define AppVersion     "1.2.4"
+#define AppVersion     "1.2.5"
 #define AppPublisher   "Ahmed Mohamed Kamel"
 #define AppURL         "https://github.com/kamah/dhikr-reminder"
 #define AppId          "{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}"

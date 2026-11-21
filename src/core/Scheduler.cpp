@@ -81,6 +81,7 @@ void Scheduler::TriggerNow() {
 }
 
 void Scheduler::Pause(int durationMinutes) {
+    int64_t pauseUntil = 0;
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         if (durationMinutes <= 0) {
@@ -89,17 +90,20 @@ void Scheduler::Pause(int durationMinutes) {
             struct tm lt;
             SafeLocalTime(&lt, &now);
             lt.tm_hour = 23; lt.tm_min = 59; lt.tm_sec = 59;
-            m_pauseUntil = mktime(&lt);
+            lt.tm_isdst = -1;
+            pauseUntil = (int64_t)mktime(&lt);
         } else {
-            m_pauseUntil = time(nullptr) + durationMinutes * 60;
+            pauseUntil = (int64_t)(time(nullptr) + durationMinutes * 60);
         }
+        m_pauseUntil.store(pauseUntil);
         m_state = ScheduleState::Paused;
     }
 
     // Persist pause state
-    auto& s = Settings::Instance().Get();
-    s.paused = true;
-    s.pauseUntilUnix = (int)m_pauseUntil;
+    Settings::Instance().Modify([pauseUntil](AppSettings& s) {
+        s.paused = true;
+        s.pauseUntilUnix = (int)pauseUntil;
+    });
     Settings::Instance().Save();
 
     Recalculate();
@@ -113,6 +117,7 @@ void Scheduler::PauseUntilTomorrow() {
     // Midnight tomorrow
     lt.tm_mday += 1;
     lt.tm_hour = 0; lt.tm_min = 0; lt.tm_sec = 0;
+    lt.tm_isdst = -1;
     int mins = (int)(mktime(&lt) - now) / 60;
     Pause(mins);
 }
@@ -120,21 +125,22 @@ void Scheduler::PauseUntilTomorrow() {
 void Scheduler::Resume() {
     {
         std::lock_guard<std::mutex> lock(m_mutex);
-        m_pauseUntil = 0;
+        m_pauseUntil.store(0);
         m_state = ScheduleState::Active;
     }
-    auto& s = Settings::Instance().Get();
-    s.paused = false;
-    s.pauseUntilUnix = 0;
+    Settings::Instance().Modify([](AppSettings& s) {
+        s.paused = false;
+        s.pauseUntilUnix = 0;
+    });
     Settings::Instance().Save();
     Recalculate();
     LOG_INFO("Reminders resumed");
 }
 
 bool Scheduler::IsPaused() const {
-    std::lock_guard<std::mutex> lock(m_mutex);
-    if (m_pauseUntil == 0) return false;
-    return time(nullptr) < m_pauseUntil;
+    int64_t pauseUntil = m_pauseUntil.load();
+    if (pauseUntil == 0) return false;
+    return (int64_t)time(nullptr) < pauseUntil;
 }
 
 ScheduleState Scheduler::GetState() const {
@@ -185,26 +191,30 @@ void Scheduler::WorkerThread() {
 
             if (timeoutReached) {
                 bool pauseExpired = false;
-                if (m_pauseUntil != 0 && time(nullptr) >= m_pauseUntil) {
-                    m_pauseUntil = 0;
+                int64_t pauseUntil = m_pauseUntil.load();
+                if (pauseUntil != 0 && (int64_t)time(nullptr) >= pauseUntil) {
+                    m_pauseUntil.store(0);
                     m_state = ScheduleState::Active;
                     pauseExpired = true;
                 }
 
-                bool isPaused = (m_pauseUntil != 0 && time(nullptr) < m_pauseUntil);
+                bool isPaused = (m_pauseUntil.load() != 0 && (int64_t)time(nullptr) < m_pauseUntil.load());
                 auto callback = m_onTrigger;
                 lock.unlock(); // Release mutex before calling Settings or dispatching UI callback
 
                 if (pauseExpired) {
-                    auto& s = Settings::Instance().Get();
-                    s.paused = false;
-                    s.pauseUntilUnix = 0;
+                    Settings::Instance().Modify([](AppSettings& s) {
+                        s.paused = false;
+                        s.pauseUntilUnix = 0;
+                    });
                     Settings::Instance().Save();
                     Settings::Instance().NotifyChanged();
+                    // Recompute the next periodic trigger time instead of firing immediately at expiry
+                    continue;
                 }
 
                 // Verify reminder can trigger
-                auto& s = Settings::Instance().Get();
+                auto s = Settings::Instance().GetCopy();
                 if (s.remindersEnabled && !isPaused) {
                     time_t nowT = time(nullptr);
                     if (nowT - m_lastFiredTime.load() >= 20) {
@@ -242,12 +252,13 @@ time_t Scheduler::ComputeNextReminderTime() const {
     }
 
     // Check pause
-    if (m_pauseUntil != 0) {
+    int64_t pauseUntil = m_pauseUntil.load();
+    if (pauseUntil != 0) {
         time_t now = time(nullptr);
-        if (now < m_pauseUntil) {
+        if ((int64_t)now < pauseUntil) {
             std::lock_guard<std::mutex> lock(m_mutex);
             const_cast<Scheduler*>(this)->m_state = ScheduleState::Paused;
-            return m_pauseUntil;
+            return (time_t)pauseUntil;
         }
     }
 
@@ -268,6 +279,7 @@ time_t Scheduler::ComputeNextReminderTime() const {
         struct tm midnight = lt;
         midnight.tm_mday += daysAhead;
         midnight.tm_hour = 0; midnight.tm_min = 0; midnight.tm_sec = 0;
+        midnight.tm_isdst = -1;
         mktime(&midnight); // Normalize
 
         int startMin = ds.startHour * 60 + ds.startMin;
@@ -284,6 +296,7 @@ time_t Scheduler::ComputeNextReminderTime() const {
 
             struct tm fireTm = midnight;
             fireTm.tm_min += t;
+            fireTm.tm_isdst = -1;
             time_t fireTime = mktime(&fireTm);
 
             if (fireTime > now) {
@@ -310,6 +323,7 @@ time_t Scheduler::ComputeNextReminderTime() const {
         struct tm midnight = lt;
         midnight.tm_mday += daysAhead;
         midnight.tm_hour = 0; midnight.tm_min = 0; midnight.tm_sec = 0;
+        midnight.tm_isdst = -1;
         mktime(&midnight);
 
         int startMin = ds.startHour * 60 + ds.startMin;
@@ -319,6 +333,7 @@ time_t Scheduler::ComputeNextReminderTime() const {
 
         struct tm startTm = midnight;
         startTm.tm_min += startMin;
+        startTm.tm_isdst = -1;
         time_t absStart = mktime(&startTm);
         time_t absEnd = absStart + duration * 60;
 
