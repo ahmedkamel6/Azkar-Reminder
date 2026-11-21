@@ -33,6 +33,25 @@ namespace dhikr {
 #define TIMER_FULLSCREEN_RESUME 1002
 #define TIMER_TRAY_RETRY        1003
 
+static bool ShouldSuppressReminderForFullscreen(const AppSettings& s) {
+    if (!s.suppressDuringFullscreen) return false;
+    const auto fsMonitors = FullScreenDetector::Instance().GetFullScreenMonitors();
+    if (fsMonitors.empty()) return false;
+
+    if (s.popupMonitor == PopupMonitor::All) {
+        const auto allMonitors = PopupWindow::EnumerateMonitors();
+        for (const auto& m : allMonitors) {
+            if (std::find(fsMonitors.begin(), fsMonitors.end(), m.hMon) == fsMonitors.end()) {
+                return false; // At least one connected monitor has no fullscreen window
+            }
+        }
+        return true; // All monitors are currently running fullscreen apps
+    }
+
+    HMONITOR targetMon = PopupWindow::Instance().GetTargetMonitor();
+    return targetMon && std::find(fsMonitors.begin(), fsMonitors.end(), targetMon) != fsMonitors.end();
+}
+
 static std::string WStringToUtf8(const std::wstring& w) {
     if (w.empty()) return {};
     int sz = WideCharToMultiByte(CP_UTF8, 0, w.data(), (int)w.size(), nullptr, 0, nullptr, nullptr);
@@ -743,7 +762,7 @@ LRESULT MainWindow::OnReminder(bool forcePreview) {
     if (item) {
         // Fullscreen distraction protection check
         auto settingsSnap = Settings::Instance().GetCopy();
-        if (settingsSnap.suppressDuringFullscreen && FullScreenDetector::Instance().IsFullScreenActive()) {
+        if (ShouldSuppressReminderForFullscreen(settingsSnap)) {
             HWND fg = GetForegroundWindow();
             wchar_t fgTitle[128] = { 0 };
             wchar_t fgClass[64]  = { 0 };
@@ -938,7 +957,7 @@ LRESULT MainWindow::OnTimer(UINT_PTR timerId) {
     }
     if (timerId == TIMER_FULLSCREEN_RESUME) {
         if (m_pendingFullscreenReminder) {
-            if (!FullScreenDetector::Instance().IsFullScreenActive()) {
+            if (!ShouldSuppressReminderForFullscreen(Settings::Instance().GetCopy())) {
                 KillTimer(m_hwnd, TIMER_FULLSCREEN_RESUME);
                 ContentItem itemToShow = *m_pendingFullscreenReminder;
                 m_pendingFullscreenReminder.reset();

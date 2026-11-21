@@ -46,6 +46,7 @@ public:
         std::wstring name;
     };
     static std::vector<MonitorInfo> EnumerateMonitors();
+    HMONITOR GetTargetMonitor();
 
     PopupWindow(const PopupWindow&) = delete;
     PopupWindow& operator=(const PopupWindow&) = delete;
@@ -62,7 +63,6 @@ private:
     // Position calculation
     RECT CalculatePosition(int width, int height);
     RECT CalculatePositionForWorkArea(int width, int height, const RECT& work);
-    HMONITOR GetTargetMonitor();
 
     // Rendering
     bool InitD2D();
@@ -110,6 +110,7 @@ private:
         int  y = 0;
     };
     std::vector<SecondaryPopup> m_secondaryPopups;
+    size_t m_activeSecondaryCount = 0;
     void HideAll();
 
     // Animation progress 0.0–1.0

@@ -6,6 +6,7 @@
 #include "../core/Application.h"
 #include "../core/Settings.h"
 #include "../core/Logger.h"
+#include "../core/FullScreenDetector.h"
 #include "../audio/AudioEngine.h"
 #include "../core/Database.h"
 #include "../core/Scheduler.h"
@@ -31,6 +32,21 @@ namespace {
         MultiByteToWideChar(CP_UTF8, 0, str.c_str(), -1, result.data(), size);
         return result;
     }
+
+#ifndef WDA_EXCLUDEFROMCAPTURE
+#define WDA_EXCLUDEFROMCAPTURE 0x00000011
+#endif
+
+    void ExcludeFromScreenCapture(HWND hwnd) {
+        if (!hwnd || !IsWindow(hwnd)) return;
+        if (!SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE)) {
+            static bool loggedOnce = false;
+            if (!loggedOnce) {
+                loggedOnce = true;
+                LOG_WARN("SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE) unsupported or failed: " + std::to_string(GetLastError()));
+            }
+        }
+    }
 }
 
 PopupWindow& PopupWindow::Instance() {
@@ -52,6 +68,7 @@ PopupWindow::~PopupWindow() {
 }
 
 void PopupWindow::HideAll() {
+    m_activeSecondaryCount = 0;
     if (m_hwnd && IsWindow(m_hwnd)) ShowWindow(m_hwnd, SW_HIDE);
     for (auto& sec : m_secondaryPopups) {
         if (sec.hwnd && IsWindow(sec.hwnd)) {
@@ -110,6 +127,8 @@ bool PopupWindow::Create(HINSTANCE hInstance) {
         LOG_ERROR("Failed to create popup window");
         return false;
     }
+
+    ExcludeFromScreenCapture(m_hwnd);
 
     UINT dpi = GetDpiForWindow(m_hwnd);
     if (dpi != 0) {
@@ -398,14 +417,29 @@ void PopupWindow::Show(const ContentItem* item, bool force) {
     m_height = std::clamp((int)std::ceil(finalH), (int)minH, (int)maxH);
 
     auto monitors = EnumerateMonitors();
+    std::vector<MonitorInfo> targetMonitors;
+    if (s.popupMonitor == PopupMonitor::All && s.suppressDuringFullscreen && !force) {
+        const auto fsMonitors = FullScreenDetector::Instance().GetFullScreenMonitors();
+        for (const auto& m : monitors) {
+            if (std::find(fsMonitors.begin(), fsMonitors.end(), m.hMon) == fsMonitors.end()) {
+                targetMonitors.push_back(m);
+            }
+        }
+        if (targetMonitors.empty()) {
+            LOG_INFO("[FULLSCREEN] All monitors have active fullscreen apps — skipping popup");
+            return;
+        }
+    } else {
+        targetMonitors = monitors;
+    }
 
-    if (s.popupMonitor == PopupMonitor::All && monitors.size() > 1) {
-        // Multi-monitor simultaneous mode: show popups on all screens
-        RECT pos0 = CalculatePositionForWorkArea(m_width, m_height, monitors[0].rcWork);
+    if (s.popupMonitor == PopupMonitor::All && targetMonitors.size() > 1) {
+        // Multi-monitor simultaneous mode: show popups on all non-fullscreen screens
+        RECT pos0 = CalculatePositionForWorkArea(m_width, m_height, targetMonitors[0].rcWork);
         m_screenX = pos0.left;
         m_screenY = pos0.top;
 
-        size_t needed = monitors.size() - 1;
+        size_t needed = targetMonitors.size() - 1;
         while (m_secondaryPopups.size() < needed) {
             HWND hSec = CreateWindowExW(
                 WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
@@ -413,6 +447,7 @@ void PopupWindow::Show(const ContentItem* item, bool force) {
                 0, 0, m_width, m_height,
                 nullptr, nullptr, m_hInst, nullptr);
             if (hSec) {
+                ExcludeFromScreenCapture(hSec);
                 SetWindowLongPtrW(hSec, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
                 m_secondaryPopups.push_back({ hSec, 0, 0 });
                 LOG_INFO("Created secondary popup HWND=" + std::to_string(reinterpret_cast<uintptr_t>(hSec)));
@@ -422,25 +457,37 @@ void PopupWindow::Show(const ContentItem* item, bool force) {
             }
         }
 
-        for (size_t i = 1; i < monitors.size() && (i - 1) < m_secondaryPopups.size(); ++i) {
-            RECT posI = CalculatePositionForWorkArea(m_width, m_height, monitors[i].rcWork);
-            m_secondaryPopups[i - 1].x = posI.left;
-            m_secondaryPopups[i - 1].y = posI.top;
-            SetWindowPos(m_secondaryPopups[i - 1].hwnd, HWND_TOPMOST,
+        m_activeSecondaryCount = (std::min)(needed, m_secondaryPopups.size());
+        for (size_t i = 0; i < m_activeSecondaryCount; ++i) {
+            RECT posI = CalculatePositionForWorkArea(m_width, m_height, targetMonitors[i + 1].rcWork);
+            m_secondaryPopups[i].x = posI.left;
+            m_secondaryPopups[i].y = posI.top;
+            SetWindowPos(m_secondaryPopups[i].hwnd, HWND_TOPMOST,
                 posI.left, posI.top,
                 m_width, m_height, SWP_NOACTIVATE | SWP_SHOWWINDOW);
         }
 
-        for (size_t i = needed; i < m_secondaryPopups.size(); ++i) {
+        for (size_t i = m_activeSecondaryCount; i < m_secondaryPopups.size(); ++i) {
             if (m_secondaryPopups[i].hwnd && IsWindow(m_secondaryPopups[i].hwnd)) {
                 ShowWindow(m_secondaryPopups[i].hwnd, SW_HIDE);
             }
+        }
+    } else if (s.popupMonitor == PopupMonitor::All && targetMonitors.size() == 1) {
+        // Show only on the remaining non-fullscreen monitor
+        RECT pos = CalculatePositionForWorkArea(m_width, m_height, targetMonitors[0].rcWork);
+        m_screenX = pos.left;
+        m_screenY = pos.top;
+        m_activeSecondaryCount = 0;
+
+        for (auto& sec : m_secondaryPopups) {
+            if (sec.hwnd && IsWindow(sec.hwnd)) ShowWindow(sec.hwnd, SW_HIDE);
         }
     } else {
         // Single monitor mode (Primary, Active, or Specific)
         RECT pos = CalculatePosition(m_width, m_height);
         m_screenX = pos.left;
         m_screenY = pos.top;
+        m_activeSecondaryCount = 0;
 
         for (auto& sec : m_secondaryPopups) {
             if (sec.hwnd && IsWindow(sec.hwnd)) ShowWindow(sec.hwnd, SW_HIDE);
@@ -459,7 +506,8 @@ void PopupWindow::Show(const ContentItem* item, bool force) {
     // Start enter animation
     StartEnterAnim();
 
-    LOG_INFO("Popup shown (Monitors detected: " + std::to_string(monitors.size()) + ")");
+    LOG_INFO("Popup shown (Monitors total=" + std::to_string(monitors.size()) +
+             ", active=" + std::to_string(targetMonitors.size()) + ")");
 }
 
 void PopupWindow::Hide() {
@@ -899,9 +947,10 @@ void PopupWindow::UpdateLayered(float alpha, float slideOffsetX, float slideOffs
         LOG_WARN("UpdateLayeredWindow primary failed: " + std::to_string(GetLastError()));
     }
 
-    // Synchronize layered update across all connected monitors
-    if (Settings::Instance().GetCopy().popupMonitor == PopupMonitor::All) {
-        for (size_t i = 0; i < m_secondaryPopups.size(); ++i) {
+    // Synchronize layered update across active connected monitors
+    if (Settings::Instance().GetCopy().popupMonitor == PopupMonitor::All && m_activeSecondaryCount > 0) {
+        size_t limit = (std::min)(m_activeSecondaryCount, m_secondaryPopups.size());
+        for (size_t i = 0; i < limit; ++i) {
             const auto& sec = m_secondaryPopups[i];
             if (sec.hwnd && IsWindow(sec.hwnd)) {
                 POINT ptSec = { sec.x + (int)slideOffsetX, sec.y + (int)slideOffsetY };
