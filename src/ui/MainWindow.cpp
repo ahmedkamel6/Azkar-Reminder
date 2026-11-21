@@ -182,9 +182,10 @@ bool MainWindow::CreateWindow_(HINSTANCE hInstance) {
             workTop = mi.rcWork.top;
         }
 
-        // Adapt initial window size cleanly to the active monitor dimensions
-        int targetW = std::clamp((int)(workW * 0.62f), (int)(ds::Dims::MainWindowMinW * m_dpiScale), (int)(1080.f * m_dpiScale));
-        int targetH = std::clamp((int)(workH * 0.72f), (int)(ds::Dims::MainWindowMinH * m_dpiScale), (int)(740.f * m_dpiScale));
+        // Start at compact utility dimensions (MainWindowW x MainWindowH DPI-scaled)
+        // while still clamping cleanly on smaller monitors and keeping free edge resizing.
+        int targetW = (int)(ds::Dims::MainWindowW * m_dpiScale);
+        int targetH = (int)(ds::Dims::MainWindowH * m_dpiScale);
         m_width  = std::min(targetW, std::max((int)(ds::Dims::MainWindowMinW * m_dpiScale), workW - 40));
         m_height = std::min(targetH, std::max((int)(ds::Dims::MainWindowMinH * m_dpiScale), workH - 40));
 
@@ -402,7 +403,7 @@ D2D1_RECT_F MainWindow::ContentRect() const {
     float left  = isRtl ? 0.f : sw;
     float right = isRtl ? ((float)m_width - sw) : (float)m_width;
     float availW = right - left;
-    float maxW = 960.f * m_dpiScale;
+    float maxW = 740.f * m_dpiScale;
     if (availW > maxW) {
         float inset = (availW - maxW) * 0.5f;
         left  += inset;
