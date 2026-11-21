@@ -204,6 +204,9 @@ void SettingsPage::DrawDropdown(ID2D1RenderTarget* rt, const D2D1_RECT_F& r, con
     rt->DrawRoundedRectangle(D2D1::RoundedRect(r, rx, rx), m_brush, 1.0f);
     if (m_tfValue) {
         m_brush->SetColor(ds::TextPrimary());
+        m_tfValue->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+        m_tfValue->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+        m_tfValue->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
         D2D1_RECT_F tr = isRtl
             ? D2D1::RectF(r.left + 28*m_dpiScale, r.top, r.right - 14*m_dpiScale, r.bottom)
             : D2D1::RectF(r.left + 14*m_dpiScale, r.top, r.right - 28*m_dpiScale, r.bottom);
@@ -735,9 +738,12 @@ void SettingsPage::Draw(ID2D1RenderTarget* rt, const D2D1_RECT_F& bounds) {
 
             if (m_tfValue) {
                 m_brush->SetColor(ds::TextSecondary());
-                m_tfValue->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+                m_tfValue->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING);
+                m_tfValue->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+                float nameRight = std::max(cX + 20.f * m_dpiScale, x + soundControlReserve * m_dpiScale);
                 rt->DrawTextW(soundName.c_str(), (UINT32)soundName.size(), m_tfValue,
-                    D2D1::RectF(cX, curY + 6*m_dpiScale, x + w, curY + btnH), m_brush);
+                    D2D1::RectF(cX, curY, nameRight, curY + btnH), m_brush);
+                m_tfValue->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
             }
         } else {
             float cX = x + w;
@@ -782,7 +788,7 @@ void SettingsPage::Draw(ID2D1RenderTarget* rt, const D2D1_RECT_F& bounds) {
 
     // Full-screen behavior dropdown (when enabled)
     if (m_pendingSettings.suppressDuringFullscreen) {
-        float fsw = 240.f;
+        float fsw = 310.f;
         float fswPx = fsw * m_dpiScale;
         DrawLabel(rt, x, curY + 6*m_dpiScale, Localization::Instance().Get(L"settings.fullscreen_behavior").c_str(), fsw);
         const wchar_t* modeKeys[] = { L"settings.fullscreen_queue", L"settings.fullscreen_suppress", L"settings.fullscreen_win_notify" };
@@ -1450,7 +1456,7 @@ bool SettingsPage::OnLButtonDown(int x, int y) {
 
     // Fullscreen Behavior Dropdown
     if (m_pendingSettings.suppressDuringFullscreen) {
-        float fsw = 240.f;
+        float fsw = 310.f;
         float fswPx = fsw * m_dpiScale;
         float ffsX = ctrlLeft(fsw);
         if (x >= ffsX && x <= ffsX + fswPx && vy >= curY && vy <= curY + fh) {
@@ -1715,7 +1721,7 @@ bool SettingsPage::OnMouseMove(int x, int y) {
         curY += rowH;
 
         if (m_pendingSettings.suppressDuringFullscreen) {
-            float fsw = 240.f;
+            float fsw = 310.f;
             float fswPx = fsw * m_dpiScale;
             float ffsX = ctrlLeft(fsw);
             if (x >= ffsX && x <= ffsX + fswPx && vy >= curY && vy <= curY + fh) m_hoveredElement = 22;
