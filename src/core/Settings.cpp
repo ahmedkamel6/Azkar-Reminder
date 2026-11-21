@@ -214,6 +214,7 @@ bool Settings::Load(const std::filesystem::path& appDataPath) {
         // Full-screen & Distraction Awareness
         if (j.contains("suppressDuringFullscreen"))  s.suppressDuringFullscreen  = j["suppressDuringFullscreen"].get<bool>();
         if (j.contains("fullscreenSuppressionMode")) s.fullscreenSuppressionMode = std::clamp(j["fullscreenSuppressionMode"].get<int>(), 0, 2);
+        if (j.contains("hideFromCapture"))           s.hideFromCapture           = j["hideFromCapture"].get<bool>();
 
 
         // Internal
@@ -303,6 +304,7 @@ bool Settings::Save() {
         // Full-screen & Distraction Awareness
         j["suppressDuringFullscreen"]  = s.suppressDuringFullscreen;
         j["fullscreenSuppressionMode"] = s.fullscreenSuppressionMode;
+        j["hideFromCapture"]           = s.hideFromCapture;
 
 
         // Internal

@@ -47,6 +47,7 @@ public:
     };
     static std::vector<MonitorInfo> EnumerateMonitors();
     HMONITOR GetTargetMonitor();
+    void UpdateCaptureExclusion();
 
     PopupWindow(const PopupWindow&) = delete;
     PopupWindow& operator=(const PopupWindow&) = delete;

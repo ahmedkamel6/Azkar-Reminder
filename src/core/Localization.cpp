@@ -226,6 +226,7 @@ static std::unordered_map<std::wstring, std::wstring> g_en = {
     { L"settings.fullscreen_queue", L"Queue until full-screen ends" },
     { L"settings.fullscreen_suppress", L"Suppress reminder completely" },
     { L"settings.fullscreen_win_notify", L"Windows notification only" },
+    { L"settings.hide_from_capture", L"Hide popup in screenshots & screen recordings" },
 
     // TimePicker
     { L"timepicker.title", L"Select Time" },
@@ -494,6 +495,7 @@ static std::unordered_map<std::wstring, std::wstring> g_ar = {
     { L"settings.fullscreen_queue", L"تأجيل التذكير حتى الخروج من ملء الشاشة" },
     { L"settings.fullscreen_suppress", L"كتم التذكير تماماً" },
     { L"settings.fullscreen_win_notify", L"إشعار ويندوز فقط" },
+    { L"settings.hide_from_capture", L"إخفاء الذكر عند التقاط أو تسجيل الشاشة" },
 
     // TimePicker
     { L"timepicker.title", L"تحديد الوقت" },

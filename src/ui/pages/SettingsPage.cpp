@@ -799,6 +799,11 @@ void SettingsPage::Draw(ID2D1RenderTarget* rt, const D2D1_RECT_F& bounds) {
         curY += rowH;
     }
 
+    // Hide from screenshots / screen recording toggle
+    DrawLabel(rt, x, curY + 4*m_dpiScale, Localization::Instance().Get(L"settings.hide_from_capture").c_str(), togW);
+    DrawToggle(rt, ctrlX(togW), curY, m_pendingSettings.hideFromCapture, m_hoveredElement == 25);
+    curY += rowH;
+
     // Version label + value
     DrawLabel(rt, x, curY + 6*m_dpiScale, Localization::Instance().Get(L"about.version").c_str(), 100.f);
     if (m_tfValue) {
@@ -1482,6 +1487,15 @@ bool SettingsPage::OnLButtonDown(int x, int y) {
         curY += rowH;
     }
 
+    // Hide from capture toggle
+    float capX = ctrlLeft(togW);
+    if (x >= capX && x <= capX + togW * m_dpiScale && vy >= curY && vy <= curY + ds::Dims::ToggleH * m_dpiScale) {
+        m_pendingSettings.hideFromCapture = !m_pendingSettings.hideFromCapture;
+        CommitSettings(false);
+        return true;
+    }
+    curY += rowH;
+
     curY += rowH; // Skip version row
 
     // Check for Updates
@@ -1727,6 +1741,10 @@ bool SettingsPage::OnMouseMove(int x, int y) {
             if (x >= ffsX && x <= ffsX + fswPx && vy >= curY && vy <= curY + fh) m_hoveredElement = 22;
             curY += rowH;
         }
+
+        float capX = ctrlLeft(togW);
+        if (x >= capX && x <= capX + togW * m_dpiScale && vy >= curY && vy <= curY + ds::Dims::ToggleH * m_dpiScale) m_hoveredElement = 25;
+        curY += rowH;
 
         curY += rowH; // Skip version
 

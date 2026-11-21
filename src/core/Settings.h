@@ -141,6 +141,7 @@ struct AppSettings {
     // Full-Screen & Distraction Awareness
     bool          suppressDuringFullscreen  = true;
     int           fullscreenSuppressionMode = 0; // 0 = Queue until exit, 1 = Suppress completely, 2 = Windows notification only
+    bool          hideFromCapture           = true; // Hide popup from screenshots & screen recordings (WDA_EXCLUDEFROMCAPTURE)
 
     // Privacy
     std::wstring  installationId   = L"";  // anonymous UUID, generated once

@@ -33,19 +33,32 @@ namespace {
         return result;
     }
 
+#ifndef WDA_NONE
+#define WDA_NONE 0x00000000
+#endif
+
 #ifndef WDA_EXCLUDEFROMCAPTURE
 #define WDA_EXCLUDEFROMCAPTURE 0x00000011
 #endif
 
-    void ExcludeFromScreenCapture(HWND hwnd) {
+    void ApplyCaptureExclusionToWindow(HWND hwnd, bool exclude) {
         if (!hwnd || !IsWindow(hwnd)) return;
-        if (!SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE)) {
+        DWORD affinity = exclude ? WDA_EXCLUDEFROMCAPTURE : WDA_NONE;
+        if (!SetWindowDisplayAffinity(hwnd, affinity)) {
             static bool loggedOnce = false;
             if (!loggedOnce) {
                 loggedOnce = true;
-                LOG_WARN("SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE) unsupported or failed: " + std::to_string(GetLastError()));
+                LOG_WARN("SetWindowDisplayAffinity unsupported or failed: " + std::to_string(GetLastError()));
             }
         }
+    }
+}
+
+void PopupWindow::UpdateCaptureExclusion() {
+    const bool exclude = Settings::Instance().GetCopy().hideFromCapture;
+    ApplyCaptureExclusionToWindow(m_hwnd, exclude);
+    for (const auto& sec : m_secondaryPopups) {
+        ApplyCaptureExclusionToWindow(sec.hwnd, exclude);
     }
 }
 
@@ -128,7 +141,7 @@ bool PopupWindow::Create(HINSTANCE hInstance) {
         return false;
     }
 
-    ExcludeFromScreenCapture(m_hwnd);
+    UpdateCaptureExclusion();
 
     UINT dpi = GetDpiForWindow(m_hwnd);
     if (dpi != 0) {
@@ -418,7 +431,7 @@ void PopupWindow::Show(const ContentItem* item, bool force) {
 
     auto monitors = EnumerateMonitors();
     std::vector<MonitorInfo> targetMonitors;
-    if (s.popupMonitor == PopupMonitor::All && s.suppressDuringFullscreen && !force) {
+    if (s.popupMonitor == PopupMonitor::All && s.suppressDuringFullscreen) {
         const auto fsMonitors = FullScreenDetector::Instance().GetFullScreenMonitors();
         for (const auto& m : monitors) {
             if (std::find(fsMonitors.begin(), fsMonitors.end(), m.hMon) == fsMonitors.end()) {
@@ -426,8 +439,11 @@ void PopupWindow::Show(const ContentItem* item, bool force) {
             }
         }
         if (targetMonitors.empty()) {
-            LOG_INFO("[FULLSCREEN] All monitors have active fullscreen apps — skipping popup");
-            return;
+            if (!force) {
+                LOG_INFO("[FULLSCREEN] All monitors have active fullscreen apps — skipping popup");
+                return;
+            }
+            targetMonitors = monitors;
         }
     } else {
         targetMonitors = monitors;
@@ -447,7 +463,7 @@ void PopupWindow::Show(const ContentItem* item, bool force) {
                 0, 0, m_width, m_height,
                 nullptr, nullptr, m_hInst, nullptr);
             if (hSec) {
-                ExcludeFromScreenCapture(hSec);
+                ApplyCaptureExclusionToWindow(hSec, s.hideFromCapture);
                 SetWindowLongPtrW(hSec, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
                 m_secondaryPopups.push_back({ hSec, 0, 0 });
                 LOG_INFO("Created secondary popup HWND=" + std::to_string(reinterpret_cast<uintptr_t>(hSec)));
@@ -493,6 +509,9 @@ void PopupWindow::Show(const ContentItem* item, bool force) {
             if (sec.hwnd && IsWindow(sec.hwnd)) ShowWindow(sec.hwnd, SW_HIDE);
         }
     }
+
+    // Sync capture exclusion affinity before displaying windows
+    UpdateCaptureExclusion();
 
     // Position and show the primary window (still transparent)
     SetWindowPos(m_hwnd, HWND_TOPMOST,

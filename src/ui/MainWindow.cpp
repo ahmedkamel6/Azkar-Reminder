@@ -893,6 +893,7 @@ LRESULT MainWindow::OnSettingsChanged() {
     // Update icons for Tray and Taskbar Window
     TrayIcon::Instance().SetPaused(ds::Accent::IsAppPaused());
     TrayIcon::Instance().UpdateIcon();
+    PopupWindow::Instance().UpdateCaptureExclusion();
     UpdateAppIcon();
 
     static std::wstring s_currentLanguage = Localization::Instance().GetLanguage();
