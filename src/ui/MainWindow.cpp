@@ -124,8 +124,8 @@ void MainWindow::RegisterClass(HINSTANCE hInstance) {
 }
 
 bool MainWindow::CreateWindow_(HINSTANCE hInstance) {
-    // Standard framed window style with native Windows caption, system menu, minimize, maximize, and sizing frame
-    DWORD style = WS_OVERLAPPEDWINDOW;
+    // Framed resizable window: drag borders enabled, maximize button disabled per Tray Utility UX
+    DWORD style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_THICKFRAME;
 
     RECT rc = { 0, 0, m_width, m_height };
     AdjustWindowRectEx(&rc, style, FALSE, WS_EX_APPWINDOW);
@@ -149,20 +149,34 @@ bool MainWindow::CreateWindow_(HINSTANCE hInstance) {
         UINT dpi = GetDpiForWindow(m_hwnd);
         if (dpi != 0) {
             m_dpiScale = dpi / 96.f;
-            m_width  = (int)(820.f * m_dpiScale);
-            m_height = (int)(560.f * m_dpiScale);
-
-            RECT rcDpi = { 0, 0, m_width, m_height };
-            AdjustWindowRectExForDpi(&rcDpi, style, FALSE, WS_EX_APPWINDOW, dpi);
-            winW = rcDpi.right - rcDpi.left;
-            winH = rcDpi.bottom - rcDpi.top;
-
-            int sw = GetSystemMetricsForDpi(SM_CXSCREEN, dpi);
-            int sh = GetSystemMetricsForDpi(SM_CYSCREEN, dpi);
-            x = (sw - winW)  / 2;
-            y = (sh - winH) / 2;
-            SetWindowPos(m_hwnd, nullptr, x, y, winW, winH, SWP_NOZORDER | SWP_NOACTIVATE);
         }
+
+        HMONITOR hMon = MonitorFromWindow(m_hwnd, MONITOR_DEFAULTTONEAREST);
+        MONITORINFO mi{ sizeof(mi) };
+        int workW = GetSystemMetricsForDpi(SM_CXSCREEN, dpi ? dpi : 96);
+        int workH = GetSystemMetricsForDpi(SM_CYSCREEN, dpi ? dpi : 96);
+        int workLeft = 0, workTop = 0;
+        if (hMon && GetMonitorInfoW(hMon, &mi)) {
+            workW = mi.rcWork.right - mi.rcWork.left;
+            workH = mi.rcWork.bottom - mi.rcWork.top;
+            workLeft = mi.rcWork.left;
+            workTop = mi.rcWork.top;
+        }
+
+        // Adapt initial window size cleanly to the active monitor dimensions
+        int targetW = std::clamp((int)(workW * 0.62f), (int)(ds::Dims::MainWindowMinW * m_dpiScale), (int)(1080.f * m_dpiScale));
+        int targetH = std::clamp((int)(workH * 0.72f), (int)(ds::Dims::MainWindowMinH * m_dpiScale), (int)(740.f * m_dpiScale));
+        m_width  = std::min(targetW, std::max((int)(ds::Dims::MainWindowMinW * m_dpiScale), workW - 40));
+        m_height = std::min(targetH, std::max((int)(ds::Dims::MainWindowMinH * m_dpiScale), workH - 40));
+
+        RECT rcDpi = { 0, 0, m_width, m_height };
+        AdjustWindowRectExForDpi(&rcDpi, style, FALSE, WS_EX_APPWINDOW, dpi ? dpi : 96);
+        winW = std::min((int)(rcDpi.right - rcDpi.left), workW);
+        winH = std::min((int)(rcDpi.bottom - rcDpi.top), workH);
+
+        x = workLeft + (workW - winW) / 2;
+        y = workTop  + (workH - winH) / 2;
+        SetWindowPos(m_hwnd, nullptr, x, y, winW, winH, SWP_NOZORDER | SWP_NOACTIVATE);
 
         // 1. Set window title and enable DWM Immersive Dark Mode for native Windows caption
         SetWindowTextW(m_hwnd, ApplicationMetadata::AppName);
@@ -366,8 +380,16 @@ D2D1_RECT_F MainWindow::SidebarRect() const {
 D2D1_RECT_F MainWindow::ContentRect() const {
     float sw = ds::Dims::SidebarW * m_dpiScale;
     bool isRtl = Localization::Instance().IsRTL();
-    if (isRtl) return D2D1::RectF(0.f, 0.f, (float)m_width - sw, (float)m_height);
-    return D2D1::RectF(sw, 0.f, (float)m_width, (float)m_height);
+    float left  = isRtl ? 0.f : sw;
+    float right = isRtl ? ((float)m_width - sw) : (float)m_width;
+    float availW = right - left;
+    float maxW = 960.f * m_dpiScale;
+    if (availW > maxW) {
+        float inset = (availW - maxW) * 0.5f;
+        left  += inset;
+        right -= inset;
+    }
+    return D2D1::RectF(left, 0.f, right, (float)m_height);
 }
 
 // ── State ───────────────────────────────────────────────────────────────────
@@ -1165,6 +1187,31 @@ LRESULT CALLBACK MainWindow::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
         case WM_NCPAINT:          return DefWindowProcW(hwnd, msg, wp, lp);
         case WM_NCACTIVATE:       return DefWindowProcW(hwnd, msg, wp, lp);
         case WM_NCHITTEST:        return DefWindowProcW(hwnd, msg, wp, lp);
+        case WM_NCLBUTTONDBLCLK:  return 0; // Keep maximize disabled on title bar double click
+        case WM_SYSCOMMAND: {
+            if ((wp & 0xFFF0) == SC_MAXIMIZE) return 0;
+            return DefWindowProcW(hwnd, msg, wp, lp);
+        }
+        case WM_DISPLAYCHANGE: {
+            HMONITOR hMon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+            MONITORINFO mi{ sizeof(mi) };
+            if (hMon && GetMonitorInfoW(hMon, &mi)) {
+                RECT wr{};
+                GetWindowRect(hwnd, &wr);
+                int curW = wr.right - wr.left;
+                int curH = wr.bottom - wr.top;
+                int workW = mi.rcWork.right - mi.rcWork.left;
+                int workH = mi.rcWork.bottom - mi.rcWork.top;
+                int newW = std::min(curW, workW);
+                int newH = std::min(curH, workH);
+                int newX = std::clamp((int)wr.left, (int)mi.rcWork.left, (int)mi.rcWork.right - newW);
+                int newY = std::clamp((int)wr.top,  (int)mi.rcWork.top,  (int)mi.rcWork.bottom - newH);
+                if (newW != curW || newH != curH || newX != wr.left || newY != wr.top) {
+                    SetWindowPos(hwnd, nullptr, newX, newY, newW, newH, SWP_NOZORDER | SWP_NOACTIVATE);
+                }
+            }
+            return 0;
+        }
         case WM_QUERYENDSESSION:  return TRUE;
         case WM_ENDSESSION:
             if (wp == TRUE) {
