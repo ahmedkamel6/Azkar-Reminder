@@ -102,8 +102,9 @@ ID2D1Bitmap* ResourceLoader::LoadBitmapFromResource(
     if (targetWidth > 0 && targetHeight > 0) {
         hr = pWicFactory->CreateBitmapScaler(&pScaler);
         if (SUCCEEDED(hr) && pScaler) {
-            // WICBitmapInterpolationModeHighQualityCubic (0x4) produces razor-sharp, smooth anti-aliased downsampling
-            hr = pScaler->Initialize(pConverter, targetWidth, targetHeight, WICBitmapInterpolationModeHighQualityCubic);
+            // WICBitmapInterpolationModeFant performs full area-averaging when downsampling
+            // large assets (1024px) to compact UI emblems (28–60px), avoiding jagged rings and aliasing.
+            hr = pScaler->Initialize(pConverter, targetWidth, targetHeight, WICBitmapInterpolationModeFant);
             if (SUCCEEDED(hr)) {
                 pFinalSource = pScaler;
             }

@@ -289,30 +289,30 @@ bool PopupWindow::InitD2D() {
         m_textFmtSmall->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
     }
 
-    // Initialize WIC and load cropped circular logos for all themes + dormant
+    // Initialize WIC and load master 1024px logos downsampled 1:1 with Fant area-averaging
     HRESULT hr = CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&m_wicFactory));
     if (SUCCEEDED(hr) && m_wicFactory && m_dcRenderTarget) {
-        UINT logoPx = (UINT)(36 * m_dpiScale);
-        if (logoPx < 36) logoPx = 36;
+        UINT logoPx = (UINT)std::lround(28.f * m_dpiScale);
+        if (logoPx < 28) logoPx = 28;
 
-        int themeSmallIds[6] = {
-            IDR_LOGO_SMALL,
-            IDR_LOGO_YELLOW_SMALL,
-            IDR_LOGO_BLUE_SMALL,
-            IDR_LOGO_RED_SMALL,
-            IDR_LOGO_SILVER_SMALL,
-            IDR_LOGO_GOLD_SMALL
+        int themeMasterIds[6] = {
+            IDR_LOGO,
+            IDR_LOGO_YELLOW,
+            IDR_LOGO_BLUE,
+            IDR_LOGO_RED,
+            IDR_LOGO_SILVER,
+            IDR_LOGO_GOLD
         };
 
         for (int i = 0; i < 6; ++i) {
             m_logoBitmaps[i] = ResourceLoader::LoadBitmapFromResource(
-                m_hInst, themeSmallIds[i], m_wicFactory, m_dcRenderTarget, RT_RCDATA, logoPx, logoPx);
+                m_hInst, themeMasterIds[i], m_wicFactory, m_dcRenderTarget, RT_RCDATA, logoPx, logoPx);
         }
 
         m_logoDormantBitmap = ResourceLoader::LoadBitmapFromResource(
-            m_hInst, IDR_LOGO_DORMANT_SMALL, m_wicFactory, m_dcRenderTarget, RT_RCDATA, logoPx, logoPx);
+            m_hInst, IDR_LOGO_DORMANT, m_wicFactory, m_dcRenderTarget, RT_RCDATA, logoPx, logoPx);
 
-        LOG_INFO("PopupWindow: Embedded cropped circular theme logos loaded successfully");
+        LOG_INFO("PopupWindow: Embedded master theme logos downsampled cleanly (" + std::to_string(logoPx) + "px)");
     }
 
     return m_dcRenderTarget != nullptr;
@@ -1189,7 +1189,10 @@ void PopupWindow::DrawCrescentMark(ID2D1RenderTarget* rt, float alpha) {
     auto* bmp = GetEffectiveLogo();
     if (bmp) {
         D2D1_SIZE_F sz = bmp->GetSize();
-        D2D1_RECT_F fitRect = LogoRenderer::FitRect(dest, sz.width, sz.height);
+        // Snap top-left to integer pixel so 1:1 pre-downsampled bitmap renders without half-pixel blur
+        float x0 = std::roundf(cx - sz.width * 0.5f);
+        float y0 = std::roundf(cy - sz.height * 0.5f);
+        D2D1_RECT_F fitRect = D2D1::RectF(x0, y0, x0 + sz.width, y0 + sz.height);
         rt->DrawBitmap(bmp, fitRect, alpha, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
     } else {
         LogoRenderer::Draw(rt, dest, alpha);

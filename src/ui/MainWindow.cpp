@@ -20,6 +20,7 @@
 #include "../core/FullScreenDetector.h"
 #include "../resource.h"
 #include <algorithm>
+#include <cmath>
 #include <windowsx.h>
 #include <dwmapi.h>
 #include <shlwapi.h>
@@ -267,38 +268,39 @@ bool MainWindow::InitD2D() {
         // We still return true so the window is shown; OnPaint has a GDI fallback.
     }
 
-    // Initialize WIC and load logos from embedded resources with high-quality downsampling
+    // Initialize WIC and load master 1024px logos downsampled 1:1 to exact display diameters
+    // (36dp Sidebar, 60dp About Hero) using Fant area-averaging so edges stay anti-aliased and crisp.
     hr = CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&m_wicFactory));
     if (SUCCEEDED(hr) && m_wicFactory && m_renderTarget) {
-        UINT smallSize = (UINT)(48 * m_dpiScale);
-        if (smallSize < 48) smallSize = 48;
-        UINT largeSize = (UINT)(256 * m_dpiScale);
-        if (largeSize < 256) largeSize = 256;
+        UINT smallSize = (UINT)std::lround(36.f * m_dpiScale);
+        if (smallSize < 36) smallSize = 36;
+        UINT largeSize = (UINT)std::lround(60.f * m_dpiScale);
+        if (largeSize < 60) largeSize = 60;
 
-        struct LogoRes { int smallId; int largeId; };
-        LogoRes themes[6] = {
-            { IDR_LOGO_SMALL,        IDR_LOGO },        // Green
-            { IDR_LOGO_YELLOW_SMALL, IDR_LOGO_YELLOW }, // Yellow
-            { IDR_LOGO_BLUE_SMALL,   IDR_LOGO_BLUE },   // Blue
-            { IDR_LOGO_RED_SMALL,    IDR_LOGO_RED },    // Red
-            { IDR_LOGO_SILVER_SMALL, IDR_LOGO_SILVER }, // Silver
-            { IDR_LOGO_GOLD_SMALL,   IDR_LOGO_GOLD },   // Gold
+        int masterIds[6] = {
+            IDR_LOGO,        // Green
+            IDR_LOGO_YELLOW, // Yellow
+            IDR_LOGO_BLUE,   // Blue
+            IDR_LOGO_RED,    // Red
+            IDR_LOGO_SILVER, // Silver
+            IDR_LOGO_GOLD,   // Gold
         };
 
         for (int i = 0; i < 6; ++i) {
             m_logoSmallBitmaps[i] = ResourceLoader::LoadBitmapFromResource(
-                m_hInst, themes[i].smallId, m_wicFactory, m_renderTarget, RT_RCDATA, smallSize, smallSize);
+                m_hInst, masterIds[i], m_wicFactory, m_renderTarget, RT_RCDATA, smallSize, smallSize);
             m_logoBitmaps[i] = ResourceLoader::LoadBitmapFromResource(
-                m_hInst, themes[i].largeId, m_wicFactory, m_renderTarget, RT_RCDATA, largeSize, largeSize);
+                m_hInst, masterIds[i], m_wicFactory, m_renderTarget, RT_RCDATA, largeSize, largeSize);
         }
 
         // Dormant silver/chrome/grey logos
         m_logoDormantSmallBitmap = ResourceLoader::LoadBitmapFromResource(
-            m_hInst, IDR_LOGO_DORMANT_SMALL, m_wicFactory, m_renderTarget, RT_RCDATA, smallSize, smallSize);
+            m_hInst, IDR_LOGO_DORMANT, m_wicFactory, m_renderTarget, RT_RCDATA, smallSize, smallSize);
         m_logoDormantBitmap = ResourceLoader::LoadBitmapFromResource(
             m_hInst, IDR_LOGO_DORMANT, m_wicFactory, m_renderTarget, RT_RCDATA, largeSize, largeSize);
 
-        LOG_INFO("MainWindow: Embedded theme logos loaded successfully with WIC resampler");
+        LOG_INFO("MainWindow: Master theme logos downsampled cleanly (" +
+                 std::to_string(smallSize) + "px / " + std::to_string(largeSize) + "px)");
     }
 
     return true;
@@ -619,6 +621,17 @@ ID2D1Bitmap* MainWindow::GetEffectiveLogo(bool isSmall) const {
     return GetThemeLogo(Settings::Instance().GetCopy().colorTheme, isSmall);
 }
 
+static D2D1_RECT_F AlignLogoRect(const D2D1_RECT_F& dest, D2D1_SIZE_F sz) {
+    float dw = dest.right - dest.left;
+    float dh = dest.bottom - dest.top;
+    if (std::abs(dw - sz.width) <= 2.f && std::abs(dh - sz.height) <= 2.f) {
+        float x0 = std::roundf((dest.left + dest.right - sz.width) * 0.5f);
+        float y0 = std::roundf((dest.top + dest.bottom - sz.height) * 0.5f);
+        return D2D1::RectF(x0, y0, x0 + sz.width, y0 + sz.height);
+    }
+    return LogoRenderer::FitRect(dest, sz.width, sz.height);
+}
+
 void MainWindow::DrawEffectiveLogo(ID2D1RenderTarget* rt, const D2D1_RECT_F& dest, bool isSmall, float alpha) const {
     if (!rt) return;
 
@@ -626,8 +639,7 @@ void MainWindow::DrawEffectiveLogo(ID2D1RenderTarget* rt, const D2D1_RECT_F& des
         ID2D1Bitmap* dormant = isSmall ? (m_logoDormantSmallBitmap ? m_logoDormantSmallBitmap : m_logoDormantBitmap)
                                        : (m_logoDormantBitmap ? m_logoDormantBitmap : m_logoDormantSmallBitmap);
         if (dormant) {
-            D2D1_SIZE_F sz = dormant->GetSize();
-            D2D1_RECT_F fit = LogoRenderer::FitRect(dest, sz.width, sz.height);
+            D2D1_RECT_F fit = AlignLogoRect(dest, dormant->GetSize());
             rt->DrawBitmap(dormant, fit, alpha, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
         } else {
             LogoRenderer::Draw(rt, dest, alpha);
@@ -641,8 +653,7 @@ void MainWindow::DrawEffectiveLogo(ID2D1RenderTarget* rt, const D2D1_RECT_F& des
         float t = ds::Accent::GetTransitionProgress();
 
         if (bmpFrom && bmpTo) {
-            D2D1_SIZE_F sz = bmpFrom->GetSize();
-            D2D1_RECT_F fit = LogoRenderer::FitRect(dest, sz.width, sz.height);
+            D2D1_RECT_F fit = AlignLogoRect(dest, bmpFrom->GetSize());
             // Seamless cross-fade
             if (1.0f - t > 0.001f) {
                 rt->DrawBitmap(bmpFrom, fit, alpha * (1.0f - t), D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
@@ -656,8 +667,7 @@ void MainWindow::DrawEffectiveLogo(ID2D1RenderTarget* rt, const D2D1_RECT_F& des
 
     ID2D1Bitmap* activeLogo = GetEffectiveLogo(isSmall);
     if (activeLogo) {
-        D2D1_SIZE_F sz = activeLogo->GetSize();
-        D2D1_RECT_F fit = LogoRenderer::FitRect(dest, sz.width, sz.height);
+        D2D1_RECT_F fit = AlignLogoRect(dest, activeLogo->GetSize());
         rt->DrawBitmap(activeLogo, fit, alpha, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
     } else {
         LogoRenderer::Draw(rt, dest, alpha);
