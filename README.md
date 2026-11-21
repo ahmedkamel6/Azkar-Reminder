@@ -40,7 +40,7 @@ Grab the latest binaries from **[GitHub Releases](https://github.com/ahmedkamel6
 | Platform | Package | Notes |
 | :--- | :--- | :--- |
 | **Windows (x64)** | `AzkarReminder-Windows-Setup.exe` / `.msix` | Windows 10 (1809+) or Windows 11, PerMonitorV2 HiDPI |
-| **macOS (Universal)** | `Azkar-Reminder-1.2.4-macOS.dmg` | Drag to Applications; run `xattr -cr "/Applications/Azkar Reminder.app"` if Gatekeeper prompts |
+| **macOS (Universal)** | `AzkarReminder-macOS.dmg` | Drag to Applications; run `xattr -cr "/Applications/Azkar Reminder.app"` if Gatekeeper prompts |
 | **Linux (x86_64)** | `AzkarReminder-x86_64.AppImage` | `chmod +x AzkarReminder-x86_64.AppImage && ./AzkarReminder-x86_64.AppImage` |
 
 ---

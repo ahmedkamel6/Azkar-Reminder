@@ -361,63 +361,23 @@ jobs:
         body: |
           ## Azkar Reminder ${{ github.ref_name }}
 
-          > بسم الله الرحمن الرحيم — تطبيق مكتب سطح مكتب هادئ وعصري للتذكير بالأذكار اليومية
+          Native desktop dhikr reminders for Windows, macOS, and Linux — built in C++20 (`Win32 / Direct2D` on Windows, `Qt 6` on macOS & Linux).
 
-          ### 📥 روابط التثبيت المباشر
+          ### Downloads
 
-          | Platform | File | Size |
-          |----------|------|------|
-          | 🪟 **Windows** (مُثبّت كلاسيكي Setup EXE) | `AzkarReminder-Windows-Setup.exe` | ~16 MB |
-          | 🏪 **Windows** (حزمة مايكروسوفت ستور MSIX) | `AzkarReminder-1.2.5.msix` | ~14 MB |
-          | 🐧 **Linux** (Ubuntu, Fedora, Arch, etc.) | `AzkarReminder-x86_64.AppImage` | ~60 MB |
-          | 🍎 **macOS** (Apple Silicon & Intel, macOS 11+) | `AzkarReminder-macOS.dmg` | ~38 MB |
+          | Platform | Artifact |
+          | :--- | :--- |
+          | **Windows (Installer)** | `AzkarReminder-Windows-Setup.exe` |
+          | **Windows (MSIX)** | `AzkarReminder-1.2.5.msix` (+ `AzkarReminder-DeveloperCert.cer`) |
+          | **macOS (Universal)** | `AzkarReminder-macOS.dmg` |
+          | **Linux (x86_64)** | `AzkarReminder-x86_64.AppImage` |
 
-          ---
+          ### Installation Notes
 
-          ### 🍎 macOS — خطوات التثبيت وتشغيل التطبيق
-
-          > ⚠️ **مهم**: macOS يضع ملفات التحميل في وضع الحجر الصحي (Gatekeeper Quarantine). لتشغيل التطبيق بسهولة:
-
-          **الطريقة الأولى (الأسل والأسرع):**
-          1. افتح ملف `AzkarReminder-macOS.dmg`.
-          2. اسحب `Azkar Reminder.app` إلى مجلد `Applications`.
-          3. اضغط مرتين على ملف **`Fix-Permissions.command`** الموجود داخل الـ DMG نفسه لإزالة الحظر وفتح التطبيق فوراً.
-
-          **الطريقة الثانية (عبر الـ Terminal):**
-          افتح الـ Terminal ونفذ الأمر التالي:
-          ```bash
-          xattr -cr "/Applications/Azkar Reminder.app"
-          ```
-          ثم افتح التطبيق من Launchpad أو مجلد التطبيقات.
-
-          ---
-
-          ### 🐧 Linux — خطوات التثبيت
-
-          1. حمّل `AzkarReminder-x86_64.AppImage`.
-          2. اجعل الملف قابلاً للتشغيل:
-          ```bash
-          chmod +x AzkarReminder-x86_64.AppImage
-          ```
-          3. شغّل التطبيق:
-          ```bash
-          ./AzkarReminder-x86_64.AppImage
-          ```
-
-          ---
-
-          ### 🪟 Windows — خيارات التثبيت
-
-          **الخيار الأول: المثبت الكلاسيكي (Setup.exe):**
-          1. حمّل `AzkarReminder-Windows-Setup.exe`.
-          2. شغّل المثبت وسيتم التثبيت وإضافة الأيقونة لشريط المهام (System Tray).
-
-          **الخيار الثاني: حزمة مايكروسوفت ستور (MSIX):**
-          - **لنشر التطبيق على متجر مايكروسوفت**: يتم رفع ملف `AzkarReminder-1.2.5.msix` إلى حسابك في Microsoft Partner Center.
-          - **للتجربة والتثبيت المباشر على ويندوز 10/11**:
-            1. حمّل شهادة التطوير المرفقة `AzkarReminder-DeveloperCert.cer`.
-            2. افتحها واختر **Install Certificate** -> **Local Machine** -> ضعها في **Trusted People**.
-            3. اضغط مرتين على `AzkarReminder-1.2.5.msix` وسيقوم Windows بتثبيته بنقرة زر واحدة.
+          - **Windows (Installer):** Run `AzkarReminder-Windows-Setup.exe`.
+          - **Windows (MSIX sideload):** Install `AzkarReminder-DeveloperCert.cer` to `Local Machine -> Trusted People`, then open `AzkarReminder-1.2.5.msix`.
+          - **macOS:** Drag `Azkar Reminder.app` to `Applications`. If Gatekeeper blocks an unsigned build, run `Fix-Permissions.command` inside the DMG or execute `xattr -cr "/Applications/Azkar Reminder.app"`.
+          - **Linux:** `chmod +x AzkarReminder-x86_64.AppImage && ./AzkarReminder-x86_64.AppImage`
         files: |
           AzkarReminder-Windows-Packages/*
           AzkarReminder-Linux-AppImage/*
