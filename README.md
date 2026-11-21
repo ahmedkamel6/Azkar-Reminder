@@ -20,16 +20,16 @@ Azkar Reminder runs quietly in the system tray and displays non-intrusive popup 
 ## Screenshots
 
 <div align="center">
-  <img src="docs/screenshots/popup.png" alt="Desktop Notification Popup" width="460" />
+  <img src="docs/screenshots/popup-en.png" alt="Desktop Notification Popup" width="560" />
 </div>
 
 | Dashboard | Schedule |
 | :---: | :---: |
-| <img src="docs/screenshots/home.png" alt="Home Dashboard" width="420" /> | <img src="docs/screenshots/reminders.png" alt="Schedule & Quiet Hours" width="420" /> |
+| <img src="docs/screenshots/home-en.png" alt="Home Dashboard" width="420" /> | <img src="docs/screenshots/schedule-en.png" alt="Schedule & Quiet Hours" width="420" /> |
 
 | Dhikr Library | Settings |
 | :---: | :---: |
-| <img src="docs/screenshots/library.png" alt="Dhikr Library" width="420" /> | <img src="docs/screenshots/settings.png" alt="Settings & Themes" width="420" /> |
+| <img src="docs/screenshots/library-en.png" alt="Dhikr Library" width="420" /> | <img src="docs/screenshots/settings-en.png" alt="Settings & Themes" width="420" /> |
 
 ---
 
